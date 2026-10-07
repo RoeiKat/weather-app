@@ -1,12 +1,15 @@
 # Architecture alternatives
 
-Status: **Open**. These are candidate outlines, not deployable designs or accepted
-decisions. App Service is the current leading compute candidate; no winner is
-selected. All candidates must satisfy the [requirements](../requirements.md).
+Status: **Compute platform selected; detailed architecture Open**. The user
+accepted Azure App Service in [ADR-001](../adr/ADR-001-compute-platform.md) on
+2026-10-07. Azure Container Apps remains the strongest alternative. These
+outlines are not deployable designs; runtime, SKU, region, capacity, networking,
+and other service decisions remain Open. All options must satisfy the
+[requirements](../requirements.md).
 
 ## Candidate A: App Service architecture
 
-**Proposed outline:** Public HTTPS entry (Front Door optional/TBD) -> App Service
+**Selected compute; proposed outline:** Public HTTPS entry (Front Door optional/TBD) -> App Service
 application -> PostgreSQL hosting TBD; server-side calls to OpenWeather.
 
 - Evaluate managed web hosting, runtime/container packaging, scaling, and release options.
@@ -25,7 +28,7 @@ Apps workload -> PostgreSQL hosting TBD; server-side calls to OpenWeather.
 - Evaluate ingress boundaries, environment networking, identity, secrets, registry, and observability.
 - Cost model: capacity/consumption and minimum replicas, registry, database/HA, ingress, networking, monitoring, and backups.
 - Open: suitability for the chosen application, scale settings, environment, and container operations.
-- Azure Functions may be evaluated as a separate serverless variant if workload evidence justifies it; it is not selected or assumed equivalent to Container Apps.
+- Azure Functions was evaluated separately and not selected; appropriate hosting can meet HA/private-network requirements, but no event-driven need currently justifies its additional programming-model/storage complexity. It is not equivalent to Container Apps.
 
 ## Candidate C: AKS/VM alternative
 
@@ -48,8 +51,12 @@ Managed Identity, Azure Monitor, and Application Insights are candidates only.
 ## Comparison criteria
 
 Use the same workload, region assumptions, and recovery targets for all options.
-Mark missing evidence **TBD**, not zero cost or guaranteed capability. Weights
-and scores require human agreement; no ranking is assigned yet.
+Mark missing evidence **TBD**, not zero cost or guaranteed capability. The
+[AI evaluation](../ai/02-compute-platform-evaluation.md#comparison-and-ai-recommendation)
+records a proposed weighted comparison prioritizing HA, PaaS alignment,
+operational simplicity, and security. Human approval selects App Service;
+individual weights/scores and configuration assumptions are not separately
+approved.
 
 | Criterion | Evidence to collect |
 | --- | --- |
@@ -72,6 +79,11 @@ Official comparison guidance consulted for this foundation on 2026-10-07:
 - [Choose an Azure compute service](https://learn.microsoft.com/azure/architecture/guide/technology-choices/compute-decision-tree)
 - [Choose an Azure container service](https://learn.microsoft.com/azure/architecture/guide/choose-azure-container-service)
 
-These references support comparison, not a completed design validation. Gather
-client targets and candidate-specific evidence, then propose a decision in
-[ADR-001](../adr/ADR-001-compute-platform.md) for human review.
+These references support comparison, not a completed design validation.
+[ADR-001](../adr/ADR-001-compute-platform.md) now records the accepted compute
+choice; the [AI evaluation](../ai/02-compute-platform-evaluation.md) preserves
+candidate-specific evidence and trade-offs. Next verify runtime compatibility,
+European region/SKU/zone support, workload and surviving capacity, private
+connectivity, comparable pricing, and release/recovery behavior before approving
+a deployable design. Revisit Container Apps if packaging or measured economics
+materially changes the comparison.
