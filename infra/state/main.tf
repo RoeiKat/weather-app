@@ -30,6 +30,10 @@ data "azurerm_client_config" "operator" {}
 resource "azurerm_resource_group" "state" {
   name     = "${var.name}-state"
   location = "swedencentral"
+
+  lifecycle {
+    ignore_changes = [tags["created_By"], tags["created_Date"]]
+  }
 }
 
 resource "azurerm_storage_account" "state" {
@@ -51,6 +55,10 @@ resource "azurerm_storage_account" "state" {
     container_delete_retention_policy {
       days = 7
     }
+  }
+
+  lifecycle {
+    ignore_changes = [tags["created_By"], tags["created_Date"]]
   }
 }
 
