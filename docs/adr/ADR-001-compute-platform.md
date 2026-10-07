@@ -2,32 +2,47 @@
 
 ## Status
 
-**Accepted**.
+**Under Review**. Reopened at the requesting user's direction on 2026-10-07.
 
 - Human decision owner: Requesting user.
-- Approval date: 2026-10-07.
-- Approval reference: Explicit user approval, recorded in the
+- Initial approval date: 2026-10-07.
+- Initial approval reference: Explicit user approval, preserved in the
   [compute platform evaluation AI record](../ai/02-compute-platform-evaluation.md#final-human-decision).
-- Approval scope: Azure App Service as the compute platform only; implementation
+- Initial approval scope: Azure App Service as the compute platform only; implementation
   configuration and other ADR decisions remain Open.
+- Reopening reference: Explicit user direction and rationale recorded in the
+  [reopened decision entry](../ai/02-compute-platform-evaluation.md#decision-reopened-2026-10-07).
+- Current scope: Reassess the compute decision; prior acceptance is suspended.
+  No replacement platform, revised ranking, or implementation is approved.
+
+The initial decision preceded appropriate weighting of the explicit requirement
+to leverage cloud services for the best possible cost-benefit ratio (N-05) and
+representative HA pricing. The original comparison treated expected cost
+characteristics as a 10% judgment-based criterion without dated comparable
+prices. Preserve that evidence as history, not as a sufficient current basis for
+acceptance.
 
 ## Context
 
 Small public Azure weather application with registration/login, server-side
 OpenWeather integration, saved preferences, and PostgreSQL persistence. The
 assignment prefers PaaS/managed services, European hosting, high availability,
-security/privacy, Terraform, and eventual CI/CD.
+security/privacy, Terraform, eventual CI/CD, and leveraging cloud services for
+the best possible cost-benefit ratio.
 
 Current assumptions use one primary European region, instance and Availability
 Zone failure resilience rather than regional DR, and non-public PostgreSQL
-access. Cost matters, but no explicit budget ceiling was provided. At least two
+access. Cost-effectiveness is explicit under N-05, but no explicit budget ceiling
+was provided. At least two
 continuously available application instances were evaluated as a possible HA
 baseline, not an approved capacity configuration. Runtime, packaging, traffic,
-latency targets, SKU, exact region, and pricing remain TBD.
+latency targets, SKU, and exact region remain TBD. Illustrative App Service and
+database HA pricing became available during the subsequent region evaluation;
+equivalent cross-platform pricing and workload validation remain outstanding.
 
 ## Requirements
 
-[Requirements](../requirements.md): F-01 through F-04, N-01 through N-04,
+[Requirements](../requirements.md): F-01 through F-04, N-01 through N-05,
 S-01/S-02, A-01/A-02, D-01 through D-03; current assumptions AS-04 through AS-10.
 
 ## Options considered
@@ -40,19 +55,26 @@ S-01/S-02, A-01/A-02, D-01 through D-03; current assumptions AS-04 through AS-10
 
 ## Decision
 
-Use **Azure App Service** as the application's compute platform.
+**Current decision: Under Review; no replacement selected.**
 
-Retain **Azure Container Apps** as the strongest alternative if container
-packaging becomes materially advantageous or comparable HA sizing/pricing
-demonstrates better value.
+The initial accepted decision was to use **Azure App Service**, retaining
+**Azure Container Apps** as the strongest alternative if container packaging or
+comparable HA sizing/pricing demonstrated better value. That decision is
+preserved as history and is not reaffirmed by reopening this ADR.
 
-This decision does not select a runtime, deployment package, App Service SKU,
-region, instance count, scaling policy, network topology, or entry point. It does
-not approve implementation, resource provisioning, or other proposed services.
+Reassessment must explicitly evaluate N-05 using equivalent HA-capable
+configurations, representative workload assumptions, dated pricing, and total
+operational cost. Do not select a replacement or invent revised criterion
+weights before the renewed comparison and human review.
+
+No runtime, deployment package, SKU, region, instance count, scaling policy,
+network topology, or entry point is selected by this reopening. It does not
+approve implementation, resource provisioning, or other proposed services.
 
 ## Rationale
 
-App Service best fits a conventional small web application while minimizing
+The initial rationale below is historical and must be reassessed against N-05.
+It favored App Service for a conventional small web application to minimize
 platform machinery and operational burden:
 
 - Managed web hosting aligns with the explicit PaaS preference without requiring
@@ -81,10 +103,15 @@ workload. AKS Automatic reduces, but does not eliminate, Kubernetes complexity.
 
 The [evaluation record](../ai/02-compute-platform-evaluation.md) preserves the
 comparison, proposed weights, scores, sources, and limitations. The user
-approved the platform choice, not every scoring assumption or configuration.
+initially approved the platform choice, not every scoring assumption or
+configuration, and has now explicitly reopened that choice.
 
 ## Consequences
 
+- The compute decision is no longer an accepted basis for implementation.
+  Reassess cost-effectiveness without waiving HA, security, or latency needs.
+  The remaining App Service consequences below are conditional on its eventual
+  selection. Other ADR decisions remain unchanged.
 - Azure manages hosting infrastructure; the team still owns application
   dependencies, security, configuration, health checks, releases, migrations,
   monitoring, and recovery verification. Custom containers would also require
@@ -116,7 +143,11 @@ No Key Vault, Managed Identity, or edge deployment is approved here.
 
 The strongest drawback is the provisioned-capacity cost floor of a
 zone-redundant Premium plan, potentially underutilized for a small application.
-No monthly estimate or spend authorization is established.
+The initial acceptance had no representative monthly HA price comparison.
+Subsequent illustrative pricing is recorded in the
+[reopened decision entry](../ai/02-compute-platform-evaluation.md#decision-reopened-2026-10-07);
+it is not a complete budget, validated sizing, cross-platform comparison, or
+spend authorization.
 
 Obtain comparable dated App Service and Container Apps estimates covering
 region/SKU, HA baseline, expected/peak traffic, release overlap, PostgreSQL,

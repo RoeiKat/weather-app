@@ -9,6 +9,11 @@
 - **Related decision:** [ADR-001: Compute platform](../adr/ADR-001-compute-platform.md).
 - **Related comparison:** [Architecture alternatives](../architecture/alternatives.md).
 
+**Current status:** ADR-001 is **Under Review**, reopened by the requesting user
+on 2026-10-07. The original evaluation and approval below are historical;
+see [the reopening entry](#decision-reopened-2026-10-07). No replacement compute
+platform has been selected.
+
 ## Problem/question
 
 Evaluate Azure App Service, Container Apps, Functions, AKS, and Virtual Machines
@@ -183,7 +188,9 @@ version, and topology before implementation.
 
 ## Final human decision
 
-**Approved** by the requesting user on **2026-10-07**.
+**Initially Approved** by the requesting user on **2026-10-07**; subsequently
+reopened the same day. This section preserves the original approval, not current
+acceptance. See [the reopening entry](#decision-reopened-2026-10-07).
 
 Exact approval statement:
 
@@ -228,3 +235,102 @@ reference; AI output alone was not treated as approval.
 
 Regional DR is not currently required. No database, edge, secret-management,
 networking, or delivery service is approved by the compute decision.
+
+## Decision reopened: 2026-10-07
+
+- **Author/tool:** AI assistant using Copilot SDK in VS Code; model Unknown.
+- **Human decision owner:** Requesting user.
+- **Related requirement/decision:** Explicit N-05 in
+  [requirements](../requirements.md), derived I-12, and
+  [ADR-001](../adr/ADR-001-compute-platform.md).
+- **Problem/question:** Correct the requirement classification and reopen the
+  compute decision before continuing region selection. The initial decision
+  was made before cost-effectiveness was weighted appropriately and before
+  representative HA pricing was known.
+- **Prompt (faithful summary):** The solution must leverage cloud services for
+  the best possible cost-benefit ratio; this is an explicit requirement, not a
+  secondary consideration. Update requirements, reopen ADR-001 from Accepted
+  to Under Review with the reason documented, and update this AI record. Do not
+  select a replacement compute platform or modify ADR-002. No sensitive data
+  was included; no redactions were needed.
+- **AI recommendation:** Preserve the original evaluation, scores, and human
+  approval as history; suspend current acceptance and require renewed
+  cost-benefit assessment on equivalent HA-capable configurations. Do not
+  substitute an unverified cheaper configuration or lower the failure scope.
+
+### Why the initial evidence is insufficient
+
+The original matrix assigned only 10% to expected cost characteristics. Its cost
+scores were architectural judgments, not representative price comparisons.
+Cost was classified as a project assumption rather than the explicit
+cost-effectiveness requirement now clarified by the user. Operational simplicity
+and PaaS benefits remain relevant, but they do not establish the best
+cost-benefit ratio without comparable spend and workload evidence.
+
+The subsequent read-only region evaluation retrieved current Microsoft retail
+rates on 2026-10-07 for a user-confirmed illustrative configuration: two Linux
+P1v3 App Service instances, PostgreSQL Flexible Server General Purpose
+Standard_D2ds_v5 primary plus zone-redundant standby, and 128 GiB standard Premium
+SSD storage per database server, using USD pay-as-you-go and 730 hours/month.
+This confirmation was a pricing assumption, not architecture or spend approval.
+
+| Illustrative monthly estimate | Sweden Central | North Europe | West Europe |
+| --- | --- | --- | --- |
+| App Service, two Linux P1v3 instances | $259.88 | $245.28 | $259.88 |
+| PostgreSQL primary and standby compute | $273.02 | $289.08 | $309.52 |
+| PostgreSQL storage, 256 GiB total | $35.05 | $32.38 | $35.05 |
+| Core subtotal | $567.95 | $566.74 | $604.45 |
+
+Sources from that evaluation:
+
+- [Azure Retail Prices API](https://prices.azure.com/api/retail/prices):
+  `Azure_App_Service_Premium_v3_Plan_Linux_P1_v3` hourly rates of $0.178,
+  $0.168, and $0.178; `Standard_D2ds_v5` hourly rates per selected server of
+  $0.187, $0.198, and $0.212; Flexible Server `Storage` monthly unit rates of
+  $0.1369, $0.1265, and $0.1369, respectively.
+- [PostgreSQL pricing](https://azure.microsoft.com/en-us/pricing/details/postgresql/flexible-server/)
+  and [HA configuration/billing](https://learn.microsoft.com/en-us/azure/postgresql/high-availability/how-to-configure-high-availability):
+  both primary and standby compute/storage are billed.
+- [App Service reliability](https://learn.microsoft.com/en-us/azure/reliability/reliability-app-service):
+  zone redundancy requires at least two instances and supported placement;
+  there is no separate charge for enabling the feature.
+- [PostgreSQL regional matrix](https://learn.microsoft.com/en-us/azure/postgresql/overview#azure-regions):
+  North Europe and West Europe were flagged as temporarily blocking new
+  zone-redundant HA deployments. Their estimates are hypothetical equivalent
+  configuration costs, not proof of deployability.
+
+These arithmetic estimates exclude networking/private endpoints, edge/WAF,
+egress, telemetry, excess backups, secrets, non-production environments, scaling
+and release headroom, external-provider fees, and operational labor. The storage
+API labels its unit GB/month while the pricing guidance describes GiB/month;
+the final quote must reconcile that terminology. No equivalent Container Apps
+or other-platform quote, measured capacity, or total-cost model was obtained.
+The figures establish a representative provisioned-capacity cost floor, not
+that App Service is necessarily poor value or that another platform wins.
+
+### Verification, human direction, and follow-up
+
+- **What was verified:** Read the current requirements, ADR-001, original AI
+  record, ADR guidance, and alternatives. Preserved original evaluation and
+  approval evidence. The pricing evidence above comes from the preceding
+  read-only region evaluation; it was not refreshed during this documentation
+  correction. No resources, workloads, quotas, or failover behavior were tested.
+- **Accepted in this update:** The user's explicit classification of
+  cost-effectiveness as N-05 and direction to reopen ADR-001 as Under Review.
+  AS-06 now describes comparison scope rather than making cost-effectiveness
+  optional. Related status summaries are synchronized.
+- **Deferred/not approved:** Replacement compute, revised scores/weights,
+  runtime, sizing, region, topology, spend, and implementation. ADR-002 is
+  unchanged; the previous region recommendation is not acceptance and depended
+  on a compute decision that is now under review.
+- **Final human direction:** Reopening authorized by the requesting user on
+  2026-10-07. Renewed compute acceptance is **Pending**. Exact direction:
+
+  > Reopen ADR-001 from Accepted to Under Review, documenting that the initial decision was made before this requirement was weighted appropriately and before representative HA pricing was known.
+
+- **Follow-up:** Before renewed acceptance, compare equivalent HA workload
+  capacity, low/expected/peak utilization, deployment overlap, private
+  networking, shared database costs, telemetry, backups, and operational labor.
+  Explain benefits as well as price, preserve security/latency/availability
+  constraints, distinguish facts from estimates, and obtain explicit human
+  approval. No new platform ranking is produced by this entry.

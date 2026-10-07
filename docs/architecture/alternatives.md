@@ -1,15 +1,18 @@
 # Architecture alternatives
 
-Status: **Compute platform selected; detailed architecture Open**. The user
-accepted Azure App Service in [ADR-001](../adr/ADR-001-compute-platform.md) on
-2026-10-07. Azure Container Apps remains the strongest alternative. These
+Status: **Compute platform Under Review; detailed architecture Open**. The user
+initially accepted Azure App Service in [ADR-001](../adr/ADR-001-compute-platform.md)
+on 2026-10-07 and reopened it the same day because explicit cost-effectiveness
+had been underweighted and representative HA pricing was not known at
+acceptance. No replacement is selected. Azure Container Apps remains the
+strongest previously identified alternative, not a new selection. These
 outlines are not deployable designs; runtime, SKU, region, capacity, networking,
 and other service decisions remain Open. All options must satisfy the
 [requirements](../requirements.md).
 
 ## Candidate A: App Service architecture
 
-**Selected compute; proposed outline:** Public HTTPS entry (Front Door optional/TBD) -> App Service
+**Under review; proposed outline:** Public HTTPS entry (Front Door optional/TBD) -> App Service
 application -> PostgreSQL hosting TBD; server-side calls to OpenWeather.
 
 - Evaluate managed web hosting, runtime/container packaging, scaling, and release options.
@@ -53,14 +56,16 @@ Managed Identity, Azure Monitor, and Application Insights are candidates only.
 Use the same workload, region assumptions, and recovery targets for all options.
 Mark missing evidence **TBD**, not zero cost or guaranteed capability. The
 [AI evaluation](../ai/02-compute-platform-evaluation.md#comparison-and-ai-recommendation)
-records a proposed weighted comparison prioritizing HA, PaaS alignment,
-operational simplicity, and security. Human approval selects App Service;
-individual weights/scores and configuration assumptions are not separately
-approved.
+preserves the original proposed weighted comparison prioritizing HA, PaaS
+alignment, operational simplicity, and security. Its cost weighting and
+judgment-only cost scores are insufficient for the explicit N-05 requirement.
+App Service's initial acceptance is suspended; reassessment must compare
+cost-benefit using equivalent HA configurations and total operational costs.
+No revised weights, scores, or replacement platform are approved.
 
 | Criterion | Evidence to collect |
 | --- | --- |
-| Cost | Dated estimate with region/SKU, low/expected/peak load, HA capacity, database, edge, egress, network, logs, backups, and operational labor; compare with approved budget. |
+| Cost-effectiveness (explicit N-05) | Dated comparable estimates with region/SKU, low/expected/peak load, equivalent HA capacity, database, edge, egress, network, logs, backups, and operational labor; justify benefits as well as spend. Budget ceiling and spend approval remain TBD. |
 | HA | End-to-end failure model, zone/regional coverage, minimum instances, dependency behavior, release continuity, restore/failover evidence, SLO/RTO/RPO fit; distinguish provider SLA from application SLO. |
 | Security/privacy | Threat model, authentication/authorization, TLS, ingress/origin and database exposure, identities, secrets, patch ownership, data flows/residency, retention, and abuse controls. |
 | Latency | Target geographies and p50/p95/p99 under realistic load; cold starts, API/database distance, edge routing, permissible caching, and OpenWeather latency. |
@@ -80,10 +85,11 @@ Official comparison guidance consulted for this foundation on 2026-10-07:
 - [Choose an Azure container service](https://learn.microsoft.com/azure/architecture/guide/choose-azure-container-service)
 
 These references support comparison, not a completed design validation.
-[ADR-001](../adr/ADR-001-compute-platform.md) now records the accepted compute
-choice; the [AI evaluation](../ai/02-compute-platform-evaluation.md) preserves
-candidate-specific evidence and trade-offs. Next verify runtime compatibility,
+[ADR-001](../adr/ADR-001-compute-platform.md) now records the reopened compute
+decision; the [AI evaluation](../ai/02-compute-platform-evaluation.md) preserves
+candidate-specific evidence, initial approval, and the reason for reopening.
+Next reassess explicit cost-effectiveness and verify runtime compatibility,
 European region/SKU/zone support, workload and surviving capacity, private
 connectivity, comparable pricing, and release/recovery behavior before approving
-a deployable design. Revisit Container Apps if packaging or measured economics
-materially changes the comparison.
+a deployable design. Do not reaffirm App Service or select a replacement
+without the renewed comparison and human approval.

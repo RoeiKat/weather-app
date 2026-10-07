@@ -12,9 +12,12 @@ while their implementation choices are unresolved.
 4. Request approval from the authorized human owner. Only then set **Accepted**, recording approver, approval date, and durable approval reference.
 5. Implement only the accepted scope; update related requirements and documentation.
 
-Statuses: **Proposed**, **Accepted**, **Rejected**, **Superseded**. Open/TBD labels
-describe unresolved content, not acceptance. AI-generated recommendations and
-silence are never approval.
+Statuses: **Proposed**, **Accepted**, **Under Review**, **Rejected**,
+**Superseded**. Under Review suspends a previously accepted decision at the
+authorized human owner's direction; preserve approval history and document the
+reason, date, and reopening reference. Renewed acceptance requires explicit
+human approval. Open/TBD labels describe unresolved content, not acceptance.
+AI-generated recommendations and silence are never approval.
 
 Keep accepted records as history. A changed decision needs a new ADR linked to
 the old one; mark the old record Superseded with its replacement. Never silently
@@ -23,11 +26,13 @@ approval history.
 
 ## Initial records
 
-All six records below are **Proposed**, with **TBD** decisions:
+ADR-001 is **Under Review** following explicit reopening on 2026-10-07; its
+original App Service approval is preserved as history and no replacement is
+selected. ADR-002 through ADR-006 remain **Proposed**, with **TBD** decisions.
 
 | Record | Scope |
 | --- | --- |
-| [ADR-001](ADR-001-compute-platform.md) | Compute platform |
+| [ADR-001](ADR-001-compute-platform.md) | Compute platform; Under Review |
 | [ADR-002](ADR-002-azure-region.md) | Exact European region and regional strategy |
 | [ADR-003](ADR-003-database.md) | PostgreSQL hosting, availability, and recovery configuration |
 | [ADR-004](ADR-004-global-entry-point.md) | Public/global entry and edge behavior |
