@@ -1,18 +1,18 @@
 # Architecture alternatives
 
-Status: **Compute platform Under Review; detailed architecture Open**. The user
-initially accepted Azure App Service in [ADR-001](../adr/ADR-001-compute-platform.md)
-on 2026-10-07 and reopened it the same day because explicit cost-effectiveness
-had been underweighted and representative HA pricing was not known at
-acceptance. No replacement is selected. Azure Container Apps remains the
-strongest previously identified alternative, not a new selection. These
-outlines are not deployable designs; runtime, SKU, region, capacity, networking,
-and other service decisions remain Open. All options must satisfy the
-[requirements](../requirements.md).
+Status: **Compute platform Accepted: Azure Container Apps; detailed architecture
+Open**. The user initially accepted App Service in
+[ADR-001](../adr/ADR-001-compute-platform.md) on 2026-10-07, reopened it because
+explicit cost-effectiveness had been underweighted, and accepted Container Apps
+after the [deeper Container Apps/Functions Flex reassessment](../ai/03-cost-effectiveness-reassessment.md#human-acceptance-2026-10-07).
+Functions Flex is the strongest rejected alternative. These outlines are not
+deployable designs; exact runtime version, CPU/memory, region, capacity,
+networking, frontend/entry point, and other service choices remain Open.
+All options must satisfy the [requirements](../requirements.md).
 
 ## Candidate A: App Service architecture
 
-**Under review; proposed outline:** Public HTTPS entry (Front Door optional/TBD) -> App Service
+**Historical alternative; not selected:** Public HTTPS entry (Front Door optional/TBD) -> App Service
 application -> PostgreSQL hosting TBD; server-side calls to OpenWeather.
 
 - Evaluate managed web hosting, runtime/container packaging, scaling, and release options.
@@ -23,15 +23,15 @@ application -> PostgreSQL hosting TBD; server-side calls to OpenWeather.
 
 ## Candidate B: Container Apps/serverless architecture
 
-**Proposed outline:** Public HTTPS entry (Front Door optional/TBD) -> Container
+**Selected compute; topology still proposed:** Public HTTPS entry TBD -> Container
 Apps workload -> PostgreSQL hosting TBD; server-side calls to OpenWeather.
 
 - Evaluate managed container hosting, revisions, scaling behavior, and workload profiles.
 - Evaluate cold starts versus always-ready capacity, replica requirements, zone support, connection pooling, and release behavior.
 - Evaluate ingress boundaries, environment networking, identity, secrets, registry, and observability.
 - Cost model: capacity/consumption and minimum replicas, registry, database/HA, ingress, networking, monitoring, and backups.
-- Open: suitability for the chosen application, scale settings, environment, and container operations.
-- Azure Functions was evaluated separately and not selected; appropriate hosting can meet HA/private-network requirements, but no event-driven need currently justifies its additional programming-model/storage complexity. It is not equivalent to Container Apps.
+- Open: runtime sizing, PostgreSQL pool limits, scale settings, environment/networking, AZ failure testing, and deployment/rollback testing.
+- Azure Functions Flex was evaluated separately as the strongest rejected alternative. It has the lowest raw infrastructure price at the smallest evaluated configuration and can meet HA/private-network requirements. Container Apps' conventional Node.js/TypeScript API, OCI portability, and revision-based release/rollback benefits justify its modest premium relative to the dominant PostgreSQL HA cost. Lack of an event-driven need is not the reason for rejecting Flex.
 
 ## Candidate C: AKS/VM alternative
 
@@ -59,9 +59,10 @@ Mark missing evidence **TBD**, not zero cost or guaranteed capability. The
 preserves the original proposed weighted comparison prioritizing HA, PaaS
 alignment, operational simplicity, and security. Its cost weighting and
 judgment-only cost scores are insufficient for the explicit N-05 requirement.
-App Service's initial acceptance is suspended; reassessment must compare
-cost-benefit using equivalent HA configurations and total operational costs.
-No revised weights, scores, or replacement platform are approved.
+The [completed reassessment](../ai/03-cost-effectiveness-reassessment.md) supplies
+dated small-HA pricing and total cost-benefit reasoning. Container Apps is now
+human-approved compute; no revised numerical weights/scores, exact sizing,
+regional/database choice, or recurring spend is approved.
 
 | Criterion | Evidence to collect |
 | --- | --- |
@@ -85,11 +86,12 @@ Official comparison guidance consulted for this foundation on 2026-10-07:
 - [Choose an Azure container service](https://learn.microsoft.com/azure/architecture/guide/choose-azure-container-service)
 
 These references support comparison, not a completed design validation.
-[ADR-001](../adr/ADR-001-compute-platform.md) now records the reopened compute
-decision; the [AI evaluation](../ai/02-compute-platform-evaluation.md) preserves
-candidate-specific evidence, initial approval, and the reason for reopening.
-Next reassess explicit cost-effectiveness and verify runtime compatibility,
-European region/SKU/zone support, workload and surviving capacity, private
-connectivity, comparable pricing, and release/recovery behavior before approving
-a deployable design. Do not reaffirm App Service or select a replacement
-without the renewed comparison and human approval.
+[ADR-001](../adr/ADR-001-compute-platform.md) records accepted Container Apps
+compute; the [initial AI evaluation](../ai/02-compute-platform-evaluation.md)
+preserves App Service approval and reopening history, and the
+[reassessment](../ai/03-cost-effectiveness-reassessment.md) records the deeper
+comparison and human acceptance. Next validate runtime sizing, PostgreSQL
+pool limits, European region/zone support, AZ failure/surviving capacity,
+private connectivity, and deployment/rollback before approving a deployable
+configuration. ADR-002 through ADR-006 remain unchanged. Frontend hosting and
+Front Door are separate decisions; implementation/provisioning is not authorized.

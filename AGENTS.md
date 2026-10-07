@@ -10,9 +10,9 @@ PostgreSQL persistence.
 
 - Current scope is documentation only. Do not create application/Terraform code, initialize frameworks, install dependencies, add executable pipelines, or provision resources without explicit authorization.
 - Deploy in a European Azure region; prefer PaaS/managed services. Design for high availability, geographically distributed latency, privacy, and security.
-- Terraform owns reproducible infrastructure. Eventual CI/CD is required; GitHub Actions and all named Azure service choices remain proposals.
+- Terraform owns reproducible infrastructure. Eventual CI/CD is required; GitHub Actions and Azure service choices other than accepted compute remain proposals.
 - Read [requirements](docs/requirements.md) and relevant [ADRs](docs/adr/README.md). Preserve the distinction between assignment requirements, assumptions, and decisions.
-- Do not implement unresolved choices or mark an ADR Accepted without recorded human approval. No compute platform, exact region, network topology, or entry point is selected yet.
+- Do not implement unresolved choices or mark an ADR Accepted without recorded human approval. [ADR-001](docs/adr/ADR-001-compute-platform.md) accepts Azure Container Apps as compute only; exact sizing, region, network topology, and entry point remain Open. Acceptance does not authorize implementation or provisioning.
 - Never expose secrets or personal data in code, logs, AI prompts, or documentation. Never store plaintext passwords; enforce server-side authorization and least privilege.
 - Separate presentation, domain behavior, provider integration, persistence, infrastructure, and delivery responsibilities without assuming microservices.
 - Make focused changes, preserve others' work, update related docs, and run appropriate existing checks. State what was and was not verified.

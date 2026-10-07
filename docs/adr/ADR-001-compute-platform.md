@@ -2,7 +2,8 @@
 
 ## Status
 
-**Under Review**. Reopened at the requesting user's direction on 2026-10-07.
+**Accepted**. Azure Container Apps was accepted by the requesting user on
+2026-10-07 after the completed cost-effectiveness reassessment.
 
 - Human decision owner: Requesting user.
 - Initial approval date: 2026-10-07.
@@ -12,15 +13,39 @@
   configuration and other ADR decisions remain Open.
 - Reopening reference: Explicit user direction and rationale recorded in the
   [reopened decision entry](../ai/02-compute-platform-evaluation.md#decision-reopened-2026-10-07).
-- Current scope: Reassess the compute decision; prior acceptance is suspended.
-  No replacement platform, revised ranking, or implementation is approved.
+- Renewed approval date: 2026-10-07.
+- Renewed approval reference: Explicit user direction to close ADR-001 as
+  Accepted and select Azure Container Apps, recorded in the
+  [human acceptance entry](../ai/03-cost-effectiveness-reassessment.md#human-acceptance-2026-10-07).
+- Accepted scope: Azure Container Apps as the application compute platform.
+  Exact runtime version, CPU/memory sizing, capacity, region, database hosting,
+  networking, frontend/entry point, and other ADR decisions remain Open.
+  This approval does not authorize application/Terraform generation,
+  implementation, provisioning, or recurring spend.
 
-The initial decision preceded appropriate weighting of the explicit requirement
-to leverage cloud services for the best possible cost-benefit ratio (N-05) and
-representative HA pricing. The original comparison treated expected cost
-characteristics as a 10% judgment-based criterion without dated comparable
-prices. Preserve that evidence as history, not as a sufficient current basis for
-acceptance.
+At the user's explicit direction, this reopened ADR is closed in place with
+its decision history preserved below. The original App Service acceptance is
+historical, not the current selected platform.
+
+## Decision history
+
+1. **App Service initially accepted, 2026-10-07:** The requesting user approved
+   App Service as the compute platform. The original evaluation and approval
+   remain in the [initial AI record](../ai/02-compute-platform-evaluation.md#final-human-decision).
+2. **Decision reopened, 2026-10-07:** Explicit cost-effectiveness under N-05 had
+   been underweighted. The initial comparison used a 10% judgment-based cost
+   criterion without dated comparable HA prices. The user suspended that
+   acceptance and requested reassessment; see the
+   [reopening entry](../ai/02-compute-platform-evaluation.md#decision-reopened-2026-10-07).
+3. **Deeper comparison completed, 2026-10-07:** Container Apps and Functions
+   Flex Consumption were compared for a Node.js/TypeScript API, including
+   equivalent small HA baselines, private PostgreSQL, delivery, operations,
+   portability, and the dominant HA database cost; see the
+   [cost-effectiveness reassessment](../ai/03-cost-effectiveness-reassessment.md).
+4. **Container Apps selected, 2026-10-07:** The requesting user accepted
+   Container Apps for overall cost-benefit after that reassessment. Functions
+   Flex is the strongest rejected alternative. No exact sizing or implemented
+   failure/release behavior was approved as validated.
 
 ## Context
 
@@ -33,12 +58,11 @@ the best possible cost-benefit ratio.
 Current assumptions use one primary European region, instance and Availability
 Zone failure resilience rather than regional DR, and non-public PostgreSQL
 access. Cost-effectiveness is explicit under N-05, but no explicit budget ceiling
-was provided. At least two
-continuously available application instances were evaluated as a possible HA
-baseline, not an approved capacity configuration. Runtime, packaging, traffic,
-latency targets, SKU, and exact region remain TBD. Illustrative App Service and
-database HA pricing became available during the subsequent region evaluation;
-equivalent cross-platform pricing and workload validation remain outstanding.
+was provided. The completed reassessment uses a conventional Node.js/TypeScript
+API as its design basis and compares small zone-resilient hosting configurations.
+Two continuously available replicas/instances were evaluated as an HA baseline,
+not validated production capacity. Exact runtime version, CPU/memory, traffic,
+latency targets, scale settings, region, and network topology remain TBD.
 
 ## Requirements
 
@@ -47,86 +71,118 @@ S-01/S-02, A-01/A-02, D-01 through D-03; current assumptions AS-04 through AS-10
 
 ## Options considered
 
-- Azure App Service.
-- Azure Container Apps, the strongest alternative.
-- Azure Functions, evaluated separately with HA-capable hosting.
-- Azure Kubernetes Service (AKS).
-- Azure Virtual Machines, evaluated with redundant zonal deployment.
+- **Azure Container Apps: selected.**
+- **Azure Functions Flex Consumption: strongest rejected alternative.**
+- Azure App Service: initially accepted; not selected after reassessment.
+- Azure Kubernetes Service (AKS): rejected for disproportionate cluster cost
+  and operational responsibility for this workload.
+- Azure Virtual Machines: rejected for OS administration and weak alignment
+  with the PaaS preference and low operational overhead.
 
 ## Decision
 
-**Current decision: Under Review; no replacement selected.**
+Use **Azure Container Apps as the application compute platform**.
 
-The initial accepted decision was to use **Azure App Service**, retaining
-**Azure Container Apps** as the strongest alternative if container packaging or
-comparable HA sizing/pricing demonstrated better value. That decision is
-preserved as history and is not reaffirmed by reopening this ADR.
+Preserve a conventional Node.js/TypeScript API packaged as an OCI container,
+with logical separation of authentication, preferences, PostgreSQL access,
+and OpenWeather integration; this does not require microservices.
 
-Reassessment must explicitly evaluate N-05 using equivalent HA-capable
-configurations, representative workload assumptions, dated pricing, and total
-operational cost. Do not select a replacement or invent revised criterion
-weights before the renewed comparison and human review.
-
-No runtime, deployment package, SKU, region, instance count, scaling policy,
-network topology, or entry point is selected by this reopening. It does not
-approve implementation, resource provisioning, or other proposed services.
+This selects the platform only. No exact CPU/memory sizing, runtime version,
+replica count, workload profile, scaling policy, region, database configuration,
+network topology, frontend hosting, Front Door, or other entry point is selected.
+ADR-002 through ADR-006 remain unchanged and unaccepted.
 
 ## Rationale
 
-The initial rationale below is historical and must be reassessed against N-05.
-It favored App Service for a conventional small web application to minimize
-platform machinery and operational burden:
+The assignment requires the **best overall cost-benefit**, not simply the
+lowest compute or infrastructure price. The
+[completed reassessment](../ai/03-cost-effectiveness-reassessment.md) separates
+documented capabilities, public pricing assumptions, and architectural judgment.
 
-- Managed web hosting aligns with the explicit PaaS preference without requiring
-  a container registry, function-oriented decomposition, Kubernetes, or guest
-  OS administration.
-- Current Azure documentation supports zone-redundant Premium v2-v4 plans with
-  at least two instances, subject to region/SKU and scale-unit support. This
-  provides a credible path to the current failure scope, not proof of
-  implemented application HA.
-- Outbound VNet integration provides a path to non-public PostgreSQL while
-  allowing public application ingress. Inbound restrictions/private endpoints
-  are separate decisions.
-- Supported deployment slots, scaling, CI/CD, and Terraform integration provide
-  a maintainable delivery path.
+- **Functions Flex has the lowest raw infrastructure cost at the smallest
+  evaluated configuration.** This benefit is acknowledged, not dismissed.
+- **PostgreSQL HA dominates the fixed backend cost.** The evaluated database
+  compute/storage floor is much larger than either small API hosting subtotal,
+  so Functions Flex's absolute saving is relatively small at total-backend level.
+- **Conventional application architecture:** Container Apps preserves a normal
+  Node.js/TypeScript HTTP API without requiring Functions-specific handlers
+  throughout the application or function-oriented decomposition.
+- **Deployment and recovery:** Immutable container artifacts and revisions,
+  startup/readiness-gated releases, traffic splitting, and straightforward
+  revision-based rollback provide practical release and incident-response
+  benefits. A cold retained revision may still need startup time; rollback
+  behavior must be tested.
+- **Portability:** The OCI image and conventional API reduce application-level
+  Azure lock-in compared with Functions. Azure networking, identities, and
+  platform release controls remain provider-specific; portability is not total.
+- **Managed HA and private connectivity:** Container Apps supports private
+  PostgreSQL connectivity and zone-resilient deployment without requiring
+  Kubernetes administration. Final configuration and surviving capacity still
+  require implementation validation.
+- **Delivery and overhead:** Terraform/CI/CD support and managed orchestration
+  meet the delivery/PaaS goals. The team owns container/dependency maintenance,
+  probes, configuration, and recovery, but not cluster/node operations.
 
-Container Apps remains close: managed containers, revisions, granular resource
-sizing, and flexible scaling may be preferable for a container-first stack.
-Its evaluated HA baseline also requires zone redundancy and at least two
-replicas, so scale-to-zero savings do not apply to that baseline.
+The modest hosting premium is justified by these operational, deployment, and
+portability benefits. No new weighted scores or measured labor savings are
+claimed, and no frontend/Front Door assumption is needed for this decision.
 
-Functions can meet the requirements with appropriate hosting, but its
-programming model, storage dependency, and possible separate frontend add
-complexity without a demonstrated event-driven need. AKS and VMs can meet HA
-requirements, but add disproportionate operational responsibility for this
-workload. AKS Automatic reduces, but does not eliminate, Kubernetes complexity.
+### Strongest rejected alternative: Functions Flex Consumption
 
-The [evaluation record](../ai/02-compute-platform-evaluation.md) preserves the
-comparison, proposed weights, scores, sources, and limitations. The user
-initially approved the platform choice, not every scoring assumption or
-configuration, and has now explicitly reopened that choice.
+Functions Flex can satisfy Node.js API hosting, private PostgreSQL, and AZ HA
+with the appropriate plan, always-ready instances, and ZRS storage. HTTP-only
+workloads are valid uses; lack of an event-driven business feature is not the
+reason for rejection.
+
+It was not selected because its small evaluated price advantage does not
+outweigh Container Apps' conventional/portable application model and clearer
+revision-based release/rollback controls. Flex has no deployment slots or
+built-in retained package revisions; recovery redeploys a known-good artifact,
+and the reassessment identifies region-dependent rolling-update maturity and
+limited deployment-completion visibility. It also adds Functions host/storage
+configuration. These are trade-offs, not claims that Flex is incapable of safe
+operation.
+
+Reconsider only through a future human-reviewed decision if measured workload,
+cost, team skills, or verified Flex release/recovery behavior changes the balance.
 
 ## Consequences
 
-- The compute decision is no longer an accepted basis for implementation.
-  Reassess cost-effectiveness without waiving HA, security, or latency needs.
-  The remaining App Service consequences below are conditional on its eventual
-  selection. Other ADR decisions remain unchanged.
-- Azure manages hosting infrastructure; the team still owns application
-  dependencies, security, configuration, health checks, releases, migrations,
-  monitoring, and recovery verification. Custom containers would also require
-  image maintenance.
-- App Service does not provide request-driven scale-to-zero. HA-capable capacity
-  creates an ongoing cost floor.
-- Final HA design must verify zone support, actual application instance
-  placement, surviving capacity, portable sessions/state, and health routing.
-  A provider SLA is not an application availability test.
+- Container Apps is the accepted compute direction; documentation-only scope
+  remains in force until implementation/provisioning is explicitly authorized.
+- Azure manages hosting/orchestration infrastructure. The team owns application
+  dependencies, container/base-image maintenance, registry access, security,
+  configuration, probes, releases, migrations, monitoring, and recovery tests.
+- The evaluated HA baseline keeps at least two replicas available and does not
+  claim scale-to-zero savings. Final capacity is not selected by this ADR.
+- Sessions/state must survive replica turnover; a provider SLA is not an
+  application availability or release-continuity test.
 - PostgreSQL resilience, connection recovery, OpenWeather degradation, safe
   releases, and tested backups remain necessary for end-to-end availability.
 - Global dynamic latency still depends on the European origin, database, and
   provider. An edge layer is not selected by this decision.
-- Runtime/packaging, scaling, release/rollback, SLO/RTO/RPO, and incident
-  ownership remain TBD. Regional DR is outside the current requirement scope.
+- Runtime version, capacity/scaling, detailed release procedures, SLO/RTO/RPO,
+  and incident ownership remain TBD. Regional DR remains outside current scope.
+
+## Implementation validation items
+
+These are required follow-up checks, not claims that validation has occurred:
+
+- **Runtime sizing:** Measure Node.js CPU/memory, native password-hashing
+  behavior, concurrency, latency, and single-survivor capacity; then choose
+  resource allocations and scaling limits. Exact CPU/memory is not validated.
+- **PostgreSQL pool limits:** Verify per-process pool bounds, aggregate replica
+  and release-overlap connections, PgBouncer/driver compatibility, migration
+  access, and failover reconnection with safe retry behavior.
+- **Availability-zone failure testing:** Confirm region/environment zone
+  support, placement, readiness routing, surviving capacity, and end-to-end
+  dependency behavior under replica/AZ failure; include database recovery.
+- **Deployment/rollback testing:** Verify immutable image retention,
+  readiness-gated cutover, traffic splitting, failed-release behavior, known-good
+  revision recovery time, and compatible schema migrations.
+- Validate private networking/DNS, workload identities/secrets, observability,
+  OpenWeather degradation, backups/restores, Terraform ownership, and a complete
+  realistic cost model before approving the deployable configuration.
 
 ## Security impact
 
@@ -134,32 +190,40 @@ Managed hosting reduces host maintenance, but does not satisfy authentication,
 password hashing, per-user authorization, privacy, or abuse controls by itself.
 Keep privileged credentials server-side and PostgreSQL non-public.
 
-VNet integration is outbound connectivity, not private ingress. Workload
+VNet-based database connectivity is not itself an API ingress restriction. Workload
 identity, secret storage, TLS, origin restrictions, DNS, and private operational
 access remain subject to [network security](ADR-005-network-security.md).
 No Key Vault, Managed Identity, or edge deployment is approved here.
 
 ## Cost impact
 
-The strongest drawback is the provisioned-capacity cost floor of a
-zone-redundant Premium plan, potentially underutilized for a small application.
-The initial acceptance had no representative monthly HA price comparison.
-Subsequent illustrative pricing is recorded in the
-[reopened decision entry](../ai/02-compute-platform-evaluation.md#decision-reopened-2026-10-07);
-it is not a complete budget, validated sizing, cross-platform comparison, or
-spend authorization.
+The [reassessment](../ai/03-cost-effectiveness-reassessment.md#7-pricing-evidence-and-comparable-api-cost)
+uses dated Microsoft retail prices and small matched HA evaluation allocations.
+Its Sweden Central illustrations give:
 
-Obtain comparable dated App Service and Container Apps estimates covering
-region/SKU, HA baseline, expected/peak traffic, release overlap, PostgreSQL,
-ingress/edge, networking, telemetry, backups, and operational labor. SKU, pricing,
-scaling limits, and final capacity remain TBD.
+- Container Apps API + database partial subtotals of about **$313-$341/month**.
+- Functions Flex API + database partial subtotals of about **$281-$323/month**,
+  before execution-count and host-storage charges.
+- A shared PostgreSQL HA compute/storage subtotal of about **$271/month**.
+
+These are activity sensitivities, not a traffic forecast or full budget.
+Functions' approximately **$17-$32/month** advantage before remaining addends
+and Container Apps grants is modest relative to that database cost. Larger
+allocations/activity can change or reverse the hosting comparison.
+
+The estimate does not approve Sweden Central, database hosting/SKU, CPU/memory,
+or spend. Networking/registry, storage, telemetry, egress, backups, release
+overlap, CI/migrations, nonproduction, and operational effort must be included
+in the final budget; frontend/entry decisions are separate. The reassessment's
+West Europe/North Europe database HA deployment restrictions require rechecking.
 
 ## References
 
 - [Alternatives and official compute guidance](../architecture/alternatives.md)
-- [AI evaluation, approval evidence, and remaining TBDs](../ai/02-compute-platform-evaluation.md)
-- [App Service overview](https://learn.microsoft.com/en-us/azure/app-service/overview)
-- [App Service reliability](https://learn.microsoft.com/en-us/azure/reliability/reliability-app-service)
-- [App Service VNet integration](https://learn.microsoft.com/en-us/azure/app-service/overview-vnet-integration)
-- [App Service hosting plans](https://learn.microsoft.com/en-us/azure/app-service/overview-hosting-plans)
+- [Initial evaluation, App Service approval, and reopening history](../ai/02-compute-platform-evaluation.md)
+- [Completed cost-effectiveness reassessment and human acceptance](../ai/03-cost-effectiveness-reassessment.md)
+- [Container Apps reliability](https://learn.microsoft.com/en-us/azure/reliability/reliability-container-apps)
+- [Container Apps revisions and release behavior](https://learn.microsoft.com/en-us/azure/container-apps/revisions)
+- [Container Apps VNet networking and managed-resource charges](https://learn.microsoft.com/en-us/azure/container-apps/custom-virtual-networks)
+- [Functions Flex hosting and billing](https://learn.microsoft.com/en-us/azure/azure-functions/flex-consumption-plan)
 - [Region](ADR-002-azure-region.md) and [network security](ADR-005-network-security.md)

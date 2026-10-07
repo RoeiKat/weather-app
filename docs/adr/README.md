@@ -26,13 +26,16 @@ approval history.
 
 ## Initial records
 
-ADR-001 is **Under Review** following explicit reopening on 2026-10-07; its
-original App Service approval is preserved as history and no replacement is
-selected. ADR-002 through ADR-006 remain **Proposed**, with **TBD** decisions.
+ADR-001 is **Accepted: Azure Container Apps**, approved by the requesting user
+on 2026-10-07 after the cost-effectiveness reassessment. At the user's explicit
+direction, the reopened record was closed in place, preserving initial App
+Service acceptance, reopening, deeper Container Apps/Functions Flex comparison,
+and final approval. ADR-002 through ADR-006 remain **Proposed**, with **TBD**
+decisions; exact compute sizing and implementation validation remain Open.
 
 | Record | Scope |
 | --- | --- |
-| [ADR-001](ADR-001-compute-platform.md) | Compute platform; Under Review |
+| [ADR-001](ADR-001-compute-platform.md) | Compute platform; Accepted: Azure Container Apps |
 | [ADR-002](ADR-002-azure-region.md) | Exact European region and regional strategy |
 | [ADR-003](ADR-003-database.md) | PostgreSQL hosting, availability, and recovery configuration |
 | [ADR-004](ADR-004-global-entry-point.md) | Public/global entry and edge behavior |

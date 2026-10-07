@@ -9,10 +9,12 @@
 - **Related decision:** [ADR-001: Compute platform](../adr/ADR-001-compute-platform.md).
 - **Related comparison:** [Architecture alternatives](../architecture/alternatives.md).
 
-**Current status:** ADR-001 is **Under Review**, reopened by the requesting user
-on 2026-10-07. The original evaluation and approval below are historical;
-see [the reopening entry](#decision-reopened-2026-10-07). No replacement compute
-platform has been selected.
+**Current status:** ADR-001 is **Accepted: Azure Container Apps**, approved by
+the requesting user on 2026-10-07 after the
+[cost-effectiveness reassessment](03-cost-effectiveness-reassessment.md#human-acceptance-2026-10-07).
+The original App Service evaluation/approval and
+[reopening entry](#decision-reopened-2026-10-07) below remain historical;
+see [the closure entry](#decision-closed-2026-10-07) for the current decision.
 
 ## Problem/question
 
@@ -334,3 +336,27 @@ that App Service is necessarily poor value or that another platform wins.
   Explain benefits as well as price, preserve security/latency/availability
   constraints, distinguish facts from estimates, and obtain explicit human
   approval. No new platform ranking is produced by this entry.
+
+## Decision closed: 2026-10-07
+
+- **Human decision owner/date:** Requesting user, 2026-10-07.
+- **Approval reference:** Explicit direction to mark ADR-001 Accepted and select
+  Azure Container Apps, preserved in the
+  [reassessment acceptance entry](03-cost-effectiveness-reassessment.md#human-acceptance-2026-10-07).
+- **Final human decision:** **Accepted: Azure Container Apps**, compute platform
+  only. Azure Functions Flex is the strongest rejected alternative.
+- **Basis:** Functions Flex has the lowest raw price at the smallest evaluated
+  allocation, but PostgreSQL HA dominates backend fixed cost. Container Apps'
+  conventional Node.js/TypeScript API, OCI portability, managed private/zonal
+  hosting, immutable revisions, readiness-gated releases, traffic splitting,
+  and straightforward rollback justify the modest hosting premium under N-05.
+- **History preserved:** Initial App Service acceptance, reopening over
+  underweighted explicit cost-effectiveness, deeper Container Apps/Flex
+  comparison, and final Container Apps acceptance are separate dated stages.
+  Pending statements in the preceding reopening entry describe that stage,
+  not the current decision.
+- **Not approved/validated:** Exact CPU/memory, runtime version, region, database
+  configuration, network/entry topology, or spend. Runtime sizing, PostgreSQL
+  pool limits, AZ failure testing, and deployment/rollback testing remain
+  implementation validation items. ADR-002 through ADR-006 are unchanged;
+  no application/Terraform generation or provisioning is authorized.

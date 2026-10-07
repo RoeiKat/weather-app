@@ -92,11 +92,11 @@ under AS-09 rather than whole-application failure.
 | D-02 | Infrastructure must be reproducible using Terraform. |
 | D-03 | Application deployment should eventually use CI/CD. |
 
-### Working direction (unapproved)
+### Decision status and remaining proposed directions
 
 | Topic | Current candidate/direction | Decision record |
 | --- | --- | --- |
-| Compute | Under Review; prior App Service acceptance reopened; no replacement selected | [ADR-001](adr/ADR-001-compute-platform.md) |
+| Compute | Accepted: Azure Container Apps; platform only, exact sizing/configuration unvalidated | [ADR-001](adr/ADR-001-compute-platform.md) |
 | Region | European region; no exact selection | [ADR-002](adr/ADR-002-azure-region.md) |
 | Database hosting | PostgreSQL Flexible Server leading | [ADR-003](adr/ADR-003-database.md) |
 | Global entry | Azure Front Door under consideration | [ADR-004](adr/ADR-004-global-entry-point.md) |
@@ -170,7 +170,7 @@ human-confirmed project assumption above.
 | OpenWeather | Select product/plan, search behavior, freshness, quota, caching terms, attribution, timeout/retry policy, and degraded UX. Clarify which user journeys remain available during provider outages without presenting stale or failed results as current successes. | F-02, F-03, N-03, A-01; AS-09 |
 | PostgreSQL | Decide hosting, version, sizing, zone-failure resilience, backups/retention, restore, upgrade, pooling, and failover behavior. Test connection recovery and safe retries; replication is not a substitute for recoverable backups. | F-04, N-02, N-03, A-01; AS-05, AS-08 |
 | Network and security boundaries | Define public/protected routes, origin bypass restrictions, non-public database access, secrets/workload identity, TLS, abuse controls, outbound provider access, DNS, and administrative/CI/migration connectivity. Strong isolation must not make deployment or recovery unworkable. | A-02, S-02, D-02, D-03; AS-08 |
-| Platform and observability | Select application stack, compute, entry behavior, minimum capacity, scaling, health checks, and telemetry only after comparison against agreed workload, HA, privacy, latency, and explicit cost-effectiveness criteria. ADR-001 is Under Review; no replacement compute is selected. Existing "leading" candidates are hypotheses, not selected services. | N-01 through N-03, N-05, A-01, S-02, D-01 |
+| Platform and observability | ADR-001 accepts Azure Container Apps as compute only after cost-effectiveness reassessment. Select runtime version, entry behavior, capacity/scaling, health checks, and telemetry separately. Validate runtime sizing, PostgreSQL pool limits, AZ failure behavior, and deployment/rollback; other leading service candidates remain unapproved. | N-01 through N-03, N-05, A-01, S-02, D-01 |
 | Infrastructure and delivery ownership | Decide Terraform state/bootstrap and protection, plan/apply permissions, CI provider, release identities, environments, artifacts, approvals, drift handling, and property-level ownership. Terraform owns infrastructure; application automation must not independently overwrite the same configuration. | D-02, D-03, S-02, A-01 |
 | Releases and migration | Define CI/CD adoption timing, compatible schema migration execution, release gates, rollback/roll-forward, and recovery artifacts. Application rollback does not automatically undo database changes. | D-03, F-04, A-01 |
 | Frontend and acceptance | Define and approve frontend design, accessibility target, user journeys, and loading/error/privacy states before UI implementation; these are repository planning obligations, not new assignment quotations. | F-01 through F-03, S-02 |
