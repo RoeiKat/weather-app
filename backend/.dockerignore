@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+.test-postgres
+.env
+.env.*
+!.env.example
+test
+eslint.config.js
+README.md
+.git
+*.log

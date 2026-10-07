@@ -17,19 +17,43 @@ to future source directories.
 
 ## Shared boundaries
 
-- Use React + TypeScript for the frontend and Node.js + TypeScript for the
-  backend, with PostgreSQL persistence. Runtime versions, backend framework,
-  database driver, migration tooling, and frontend hosting are not selected here.
-- Keep one simple application with logical presentation, authentication,
-  weather-provider, and persistence boundaries; do not introduce microservices,
-  speculative features, or unnecessary libraries.
+- This is a **small assignment application**. Prefer the simplest reasonable
+  implementation that satisfies the assignment securely; do not overengineer.
+- Frontend: **React + TypeScript**. Vite is acceptable **only for the frontend**.
+  Use simple reusable components and ordinary React state; do not add state
+  management or UI frameworks unless a demonstrated requirement needs them.
+- Backend: **Node.js + TypeScript + Express**, compiled normally with **`tsc`**.
+  A lightweight development runner such as `tsx` is acceptable. Do not use Vite
+  for the backend, or substitute Fastify, NestJS, Hono, or another framework.
+  Future agents must not independently replace these stack/tooling choices.
+- Keep backend structure straightforward: Express handlers, small helpers where
+  useful, parameterized PostgreSQL access, and a provider adapter. Do not add
+  unnecessary repositories, service layers, domain abstractions, event systems,
+  queues, caching layers, microservices, or extra frameworks/features. Add a
+  layer/dependency only for a concrete assignment need with human approval.
+- PostgreSQL stores users and their explicitly saved forecast selections, plus
+  minimal session data for the agreed authentication. Each selection stores
+  user ownership, city/location, selected forecast date/time, a minimal
+  temperature/description snapshot, and a server-created timestamp. Do not
+  store raw OpenWeather responses, whole forecast arrays, or automatic history,
+  and do not build a separate forecast storage service.
+  Runtime versions, driver/migration tooling, and frontend hosting remain open.
 - The frontend communicates only with our backend for application data and
   authentication. Never call OpenWeather, PostgreSQL, Key Vault, or Azure
   management APIs from the browser.
-- [OpenWeather (openweathermap.org)](https://openweathermap.org/) is the external
-  weather-data provider. Only the backend may call it; the frontend must never
+- Use the **free OpenWeather API** from
+  [openweathermap.org](https://openweathermap.org/), specifically its five-day /
+  three-hour forecast, for the coming days for a user-selected city. Do not
+  substitute current-weather-only data or introduce a paid forecast product.
+  Only the backend may call it; the frontend must never
   call OpenWeather directly and uses only our `GET /api/v1/weather` endpoint
-  for weather data.
+  for multi-day forecasts.
+- Display the multi-day forecast clearly and attractively. Saving a selected
+  forecast point stores its minimal normalized snapshot and city/location for
+  the authenticated user, not the raw provider payload.
+  After login, list that user's saved selections; selecting one must request
+  fresh forecast data from OpenWeather again through the backend. Keep the
+  saved snapshot unchanged and clearly distinguish it from the fresh forecast.
 - Keep the OpenWeather API key server-side, supplied through secure
   configuration and Key Vault-backed secret references in production under
   ADR-005. Never include it in frontend assets, responses, or logs.
@@ -90,7 +114,8 @@ to future source directories.
   test commands; do not invent commands or install tooling for planning docs.
   Test API shapes/statuses, CSRF, session rotation/expiry/logout, password
   verification, validation, concurrent duplicates, cross-user isolation,
-  persistence, and provider no-match/timeout/quota/invalid-data failures.
+  snapshot persistence, multi-day forecast normalization, fresh lookup on saved-item
+  selection, and provider no-match/timeout/quota/invalid-data failures.
   Frontend tests must cover keyboard operation, responsive layouts, forms,
   loading/error/empty states, and expired sessions.
 - Update directly related documentation and record significant AI assistance

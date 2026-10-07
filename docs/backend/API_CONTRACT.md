@@ -2,14 +2,20 @@
 
 Date: **2026-10-07**.
 Status: **Proposed shared specification, pending human review**, except the
-cookie-session, metric-only lookup, and OpenWeather provider-boundary choices
-explicitly confirmed by the user. No backend implementation is included or
-authorized.
+cookie-session, metric units, free OpenWeather multi-day forecast, and provider
+boundary requirements explicitly confirmed by the user. This corrects the
+superseded current-weather-only assumption. No backend implementation is
+included or authorized.
 
 Sources: [requirements](../requirements.md),
 [application rules](../app/AGENTS.md), accepted individual
 [ADRs](../adr/README.md), and [planning record](../ai/10-application-foundation.md).
 Neither implementation agent may independently change this contract.
+
+This is a small assignment app: React + TypeScript frontend; Node.js +
+TypeScript + Express backend compiled with `tsc` (`tsx` is acceptable for
+development). Vite is frontend-only. No replacement backend framework,
+unnecessary architectural layers, extra services, or unrequested features.
 
 ## Conventions and scope
 
@@ -24,7 +30,7 @@ Neither implementation agent may independently change this contract.
   The backend must publish and test a bounded body-size limit before release.
 - All application API responses use `Cache-Control: no-store`, including
   anonymous authentication state and errors. No public API caching is enabled.
-- No forecasts, history, geolocation permissions, unit selection, profiles,
+- No forecast history, geolocation permissions, unit selection, profiles,
   password recovery, email verification, MFA, account deletion, or provider
   administration endpoints are defined. Privacy lifecycle policy still requires
   review; missing deletion endpoints are not a compliance claim.
@@ -32,14 +38,19 @@ Neither implementation agent may independently change this contract.
 ## OpenWeather provider boundary
 
 - [OpenWeather (openweathermap.org)](https://openweathermap.org/) is the external
-  weather-data provider. Only the backend may call OpenWeather.
+  weather-data provider. Use its **free five-day / three-hour forecast API**;
+  do not require a paid daily forecast or One Call subscription. Only the
+  backend may call OpenWeather. The
+  [forecast documentation](https://openweathermap.org/api/forecast5) and
+  [free-plan listing](https://openweathermap.org/price) describe this product.
+  Respect free-plan quotas and verify key access/attribution before delivery.
 - The frontend must never call OpenWeather directly. For weather data, it calls
   only our `GET /api/v1/weather` endpoint with the application query parameters
   defined below.
 - The OpenWeather API key remains server-side and comes from secure
   configuration. In production, use Key Vault-backed secret references under
   ADR-005; never include the key in frontend assets, responses, or logs.
-- The backend must normalize OpenWeather responses into our `WeatherResponse`.
+- The backend must normalize OpenWeather responses into our `ForecastResponse`.
   Raw OpenWeather schemas/payloads must not become the frontend response
   contract. OpenWeather-specific URLs, parameters, and response fields remain
   backend implementation details; provider changes must not silently alter
@@ -233,7 +244,7 @@ Do not renew absolute authenticated lifetime indefinitely. On expiry-induced
 `401` elsewhere, clear private frontend data and bootstrap this state; do not
 automatically replay a mutation.
 
-### Current weather lookup
+### Multi-day forecast lookup
 
 | Property | Definition |
 | --- | --- |
@@ -241,7 +252,7 @@ automatically replay a mutation.
 | Authentication | None; logged-in users can additionally save the resolved location |
 | Query | Exactly one mode: `q` plus optional `countryCode`, **or** both `latitude` and `longitude` |
 | Body | None |
-| Success | `200` with `WeatherResponse` below |
+| Success | `200` with `ForecastResponse` below |
 | Errors | `400`, `404 LOCATION_NOT_FOUND`, `502 WEATHER_PROVIDER_ERROR`, `503 WEATHER_UNAVAILABLE`, `504 WEATHER_TIMEOUT` |
 
 - `q`: trimmed city name, 1-100 characters. `countryCode`: optional two-letter
@@ -249,9 +260,10 @@ automatically replay a mutation.
 - Coordinates: finite decimal values; latitude -90 to 90, longitude -180 to 180.
   Do not accept mixed query/coordinate modes, partial pairs, units, arbitrary
   provider URLs, or provider request parameters.
-- Metric-only current weather; no forecast/history. Backend selects the
-  OpenWeather product/plan and adapter after checking capabilities, quota,
-  attribution, and terms; the browser receives only our normalized shape.
+- Metric-only forecast for the coming days using the free five-day /
+  three-hour product. Request the full available horizon, not a single point
+  or current-weather endpoint. The browser receives only our normalized shape;
+  no extra daily aggregation endpoint/service or paid API is needed.
 - Resolve a city query to the provider's best matching location, then show the
   resolved name, country, and coordinates so users can verify ambiguous names.
   No autocomplete or candidate-list endpoint. Users can refine the city/country
@@ -261,10 +273,10 @@ automatically replay a mutation.
 `name` is a trimmed 1-100 character display string; `countryCode` is a valid
 uppercase country code or `null` if unavailable. Coordinates are numbers
 rounded to four decimal places by the backend, with negative zero normalized.
-Use these canonical coordinates for returned weather and saved preferences;
+Use these canonical coordinates for returned forecasts and saved preferences;
 do not independently round with different rules in the frontend.
 
-`WeatherResponse`:
+`ForecastResponse`:
 
 ```json
 {
@@ -275,36 +287,69 @@ do not independently round with different rules in the frontend.
     "longitude": 18.0686
   },
   "units": "metric",
-  "observedAt": "2026-10-07T16:00:00Z",
-  "temperatureC": 12.4,
-  "feelsLikeC": 10.8,
-  "humidityPercent": 72,
-  "windSpeedMps": 3.2,
-  "condition": {"code": "cloudy", "description": "Overcast clouds"}
+  "fetchedAt": "2026-10-07T18:30:00Z",
+  "timezoneOffsetSeconds": 7200,
+  "forecast": [
+    {
+      "forecastAt": "2026-10-07T21:00:00Z",
+      "temperatureC": 12.4,
+      "condition": {"code": "cloudy", "description": "Overcast clouds"}
+    },
+    {
+      "forecastAt": "2026-10-08T00:00:00Z",
+      "temperatureC": 11.2,
+      "condition": {"code": "rain", "description": "Light rain"}
+    }
+  ]
 }
 ```
 
-All fields are required; nullable only where stated. Temperature/feels-like
-values are finite numbers, humidity is an integer 0-100, wind speed is finite
-and nonnegative. `condition.code` is one of `clear`, `cloudy`, `rain`,
+The example abbreviates the array; a real success returns all available future
+three-hour forecast points across the five-day horizon, normally about 40,
+not just the two shown. The horizon may touch six local calendar dates with
+partial first/last days; do not promise five complete daily summaries.
+
+All fields are required; nullable only where stated. `units` is exactly
+`"metric"`. `fetchedAt` is the backend's successful retrieval time, not an
+observation time or the age of the provider's forecast model.
+`timezoneOffsetSeconds` is the location's provider-supplied integer UTC offset
+in seconds, from -43200 to 50400; use it to display/group the forecast in the
+selected city's local time rather than the browser's timezone. It is a supplied
+fixed offset, not an inferred IANA timezone or a DST-transition guarantee.
+
+`forecast` is a nonempty array of exactly `{forecastAt, temperatureC, condition}`
+objects, sorted by strictly increasing unique UTC `forecastAt` timestamps.
+Each timestamp is the forecast's valid time, never an observation timestamp.
+Temperature is a finite Celsius number. `condition.code` is one of `clear`, `cloudy`, `rain`,
 `drizzle`, `thunderstorm`, `snow`, `mist`, `other`; `description` is nonempty
 plain text, at most 200 characters. The backend owns provider-code mapping.
-`observedAt` is the provider observation timestamp, not retrieval time.
-Unavailable/malformed required fields produce an explicit provider error,
-not zero/null placeholders. No provider icon URL or raw payload is returned.
+Missing/empty forecast data or malformed required fields produce an explicit
+provider error; do not silently drop invalid entries or fabricate days/zero
+values. No provider icon URL, raw field names, or raw payload is returned.
 
-Initial responses are live lookups without a stale-success fallback. Runtime
-caching/freshness/retry policies need coordinated approval and provider-term
-review before introduction. The UI may retain a previous result only if clearly
-labeled as previous with its observation time and the new lookup's failure.
+Every search and saved-item selection triggers a new backend request and a
+fresh OpenWeather forecast fetch. Do not introduce a caching layer or use a
+saved snapshot as the weather endpoint's fresh response. The UI may retain a previous result only if clearly labeled
+as previous with its retrieval time and the new lookup's failure.
 
-### Saved location preferences
+### Saved forecast selections
 
-A preference is a saved location belonging to the current user. No user IDs,
-units, weather snapshots, ranking, custom labels, or lookup history are stored
-through these endpoints.
+A preference is a user-selected forecast point, saved as a minimal snapshot.
+PostgreSQL stores its ID, owning user ID, city/location, selected forecast
+date/time, temperature in Celsius, weather description, and creation timestamp.
+Keep the location so reopening can fetch a fresh multi-day forecast.
+Ownership is derived from the authenticated session; no client-submitted user
+ID is accepted or exposed in the preference response. Do not store raw
+OpenWeather responses, whole forecast arrays, ranking, custom labels, or
+automatically collected lookup history.
 
-`Preference`:
+`ForecastSnapshot` has exactly `forecastAt`, `temperatureC`, and `description`.
+`forecastAt` is the selected point's valid date/time as a UTC RFC 3339 timestamp,
+not the save time. Temperature is a finite Celsius number; description is
+nonempty plain text, at most 200 characters. Metric units are fixed by this
+contract, so no units column or unit-selection field is needed.
+
+`Preference` has exactly `id`, `location`, `snapshot`, and `createdAt`:
 
 ```json
 {
@@ -315,40 +360,78 @@ through these endpoints.
     "latitude": 59.3293,
     "longitude": 18.0686
   },
-  "createdAt": "2026-10-07T16:10:00Z"
+  "snapshot": {
+    "forecastAt": "2026-10-08T00:00:00Z",
+    "temperatureC": 11.2,
+    "description": "Light rain"
+  },
+  "createdAt": "2026-10-07T18:35:00Z"
+}
+```
+
+Save request example:
+
+```json
+{
+  "location": {
+    "name": "Stockholm",
+    "countryCode": "SE",
+    "latitude": 59.3293,
+    "longitude": 18.0686
+  },
+  "snapshot": {
+    "forecastAt": "2026-10-08T00:00:00Z",
+    "temperatureC": 11.2,
+    "description": "Light rain"
+  }
 }
 ```
 
 | Method / route | Auth | Request | Success | Endpoint-specific errors |
 | --- | --- | --- | --- | --- |
 | `GET /api/v1/preferences` | Required | No body/query | `200 {"preferences":[Preference]}`; empty array when none | `401 UNAUTHENTICATED` |
-| `POST /api/v1/preferences` | Required + CSRF | `{"location":Location}` | `201 {"preference":Preference}` if new; `200` with same shape if already saved | `400 VALIDATION_ERROR`, `401 UNAUTHENTICATED` |
+| `POST /api/v1/preferences` | Required + CSRF | `{"location":Location,"snapshot":ForecastSnapshot}` | `201 {"preference":Preference}` if new; `200` with same shape if already saved | `400 VALIDATION_ERROR`, `401 UNAUTHENTICATED` |
 | `DELETE /api/v1/preferences/{preferenceId}` | Required + CSRF | Nonempty opaque path ID; no body/query | `204`, no body | `401 UNAUTHENTICATED`, `404 PREFERENCE_NOT_FOUND` |
 
 The bracketed type names in this table describe objects, not literal JSON
-strings. Use the exact object fields shown above. Lists sort by `createdAt`
-ascending, then `id` ascending for ties. No pagination or preference-count cap
+strings. Use the exact object fields shown above. `createdAt` is assigned by the
+backend on insertion; clients cannot supply IDs, ownership, or creation times.
+Lists sort by `createdAt` ascending, then `id` ascending for ties.
+After login, the frontend loads the current user's list. No pagination or preference-count cap
 is proposed for the initial small application; revisit with the human owner
 if expected volume requires a cap or pagination.
 
 Validate submitted location fields and canonicalize coordinates server-side
 as above. Names are untrusted display text, not identity or authorization.
-The frontend submits the location returned by weather lookup. Saving and
-listing/deleting do not call OpenWeather and remain available during its outage.
+The frontend submits the returned location and the selected forecast point,
+mapping its `condition.description` to `snapshot.description`. Validate the
+snapshot's exact fields, types, timestamp, and bounds on the backend, as well
+as the location; never accept a raw provider object. This is a saved
+user-submitted selection, not independently attested provider evidence.
+No signing scheme or second provider call is needed to save it. Saving and
+listing/deleting remain available during OpenWeather outages.
 
-Enforce uniqueness atomically on user + canonical latitude/longitude, including
-concurrent requests. A duplicate returns the existing record without changing
-its name/country/creation time. Another user's identical coordinates are a
-different preference. Scope deletion by user + preference ID and return the
-same `404` for absent and not-owned records. The client fetches weather for a
-saved location via the coordinate mode; there is no extra preference-weather
-route or update endpoint.
+Enforce uniqueness atomically on user + canonical latitude/longitude +
+selected `forecastAt`, including concurrent requests. Different forecast times
+for the same city may be saved separately. A duplicate returns the existing
+record without changing its location, snapshot, or creation time. Another
+user's identical selection is a different preference.
+Keep saved snapshots unchanged even after their forecast time passes or the
+provider forecast changes; they are explicitly labeled saved data, not a
+forecast cache. Scope deletion by user + preference ID and return the
+same `404` for absent and not-owned records. Selecting any saved item calls
+`GET /api/v1/weather` with its coordinates; the backend must fetch a fresh
+multi-day forecast from OpenWeather again. Listing preferences alone does not
+fetch forecasts. The fresh response never overwrites the saved snapshot.
+There is no extra preference-forecast route or update endpoint.
 
 ## Implementation acceptance
 
 Before code, review the proposed policies/limits above and pending items in
 the [planning record](../ai/10-application-foundation.md). Implementers must
 verify exact routes, shapes, statuses, headers, ownership, concurrency,
+snapshot persistence/validation, distinct forecast-time saves, multi-day
+normalization, new provider calls on repeated saved-item selection,
 provider failure behavior, and session/CSRF lifecycle using controlled fixtures.
 No runtime, transport, load, security, or provider compatibility has been tested
 by this documentation session.
