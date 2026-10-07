@@ -1,0 +1,140 @@
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['infra/**', '.github/workflows/terraform.yml']
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [plan, apply]
+        default: plan
+      plan_run_id:
+        description: Reviewed plan workflow run ID (apply only)
+        type: string
+      plan_run_attempt:
+        description: Reviewed plan attempt (apply only)
+        type: string
+        default: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: '1.16.5'
+          terraform_wrapper: false
+      - run: terraform -chdir=infra fmt -check -recursive
+      - run: terraform -chdir=infra init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra validate
+      - run: terraform -chdir=infra test
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+      - run: node --test infra/test/delivery.test.mjs
+      - run: terraform -chdir=infra/state init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/state validate
+
+  trusted:
+    needs: validate
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: assignment
+    concurrency:
+      group: weather-production-mutation
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_USE_AZUREAD: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACA_APP_NAME: ${{ vars.ACA_APP_NAME }}
+      MIGRATION_JOB_NAME: ${{ vars.MIGRATION_JOB_NAME }}
+      STATE_ACCOUNT: ${{ vars.TF_STATE_ACCOUNT }}
+      STATE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TERRAFORM_INPUTS_JSON: ${{ vars.TERRAFORM_INPUTS_JSON }}
+      PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+      PLAN_RUN_ATTEMPT: ${{ inputs.plan_run_attempt }}
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: '1.16.5'
+          terraform_wrapper: false
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+      - name: Initialize protected Azure backend
+        run: |
+          terraform -chdir=infra init -input=false -lockfile=readonly \
+            -backend-config="storage_account_name=$STATE_ACCOUNT" \
+            -backend-config="resource_group_name=$STATE_GROUP" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=production.tfstate"
+          terraform -chdir=infra validate
+      - name: Create protected plan
+        if: inputs.operation != 'apply'
+        run: |
+          node infra/scripts/terraform-plan.mjs inputs
+          if ! terraform -chdir=infra plan -input=false -lock-timeout=5m -out="$GITHUB_WORKSPACE/production.tfplan" > "$RUNNER_TEMP/terraform-plan.log" 2>&1; then
+            az storage blob upload --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfdiagnostics \
+              --name "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/plan.log" --file "$RUNNER_TEMP/terraform-plan.log" --overwrite false --only-show-errors --output none
+            echo "::error::Terraform plan failed. Authorized operators must inspect its private tfdiagnostics log; no plan is published."
+            exit 1
+          fi
+          node infra/scripts/terraform-plan.mjs seal
+          prefix="$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          az storage blob upload --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfplans \
+            --name "$prefix/production.tfplan" --file production.tfplan --overwrite false --only-show-errors --output none
+          az storage blob upload --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfplans \
+            --name "$prefix/metadata.json" --file plan-metadata.json --overwrite false --only-show-errors --output none
+      - name: Apply only the reviewed saved plan
+        if: inputs.operation == 'apply'
+        run: |
+          [[ "$PLAN_RUN_ID" =~ ^[0-9]+$ && "$PLAN_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || exit 1
+          prefix="$PLAN_RUN_ID/$PLAN_RUN_ATTEMPT"
+          az storage blob download --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfplans \
+            --name "$prefix/production.tfplan" --file production.tfplan --only-show-errors --output none
+          az storage blob download --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfplans \
+            --name "$prefix/metadata.json" --file plan-metadata.json --only-show-errors --output none
+          node infra/scripts/terraform-plan.mjs verify
+          if ! terraform -chdir=infra apply -input=false -lock-timeout=5m "$GITHUB_WORKSPACE/production.tfplan" > "$RUNNER_TEMP/terraform-apply.log" 2>&1; then
+            az storage blob upload --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfdiagnostics \
+              --name "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/apply.log" --file "$RUNNER_TEMP/terraform-apply.log" --overwrite false --only-show-errors --output none
+            echo "::error::Infrastructure apply failed or partially completed; inspect protected diagnostics and re-plan. Do not retry a stale plan."
+            exit 1
+          fi
+          PUBLIC_URL=$(terraform -chdir=infra output -raw public_url)
+          EXPECT_API_CREATED=$(terraform -chdir=infra output -json deployment | node --input-type=module -e \
+            "let input=''; for await (const chunk of process.stdin) input+=chunk; const flag=JSON.parse(input).api_created; if (typeof flag !== 'boolean') throw new Error('Missing API bootstrap output'); console.log(flag);")
+          export PUBLIC_URL EXPECT_API_CREATED
+          echo "Assignment URL: $PUBLIC_URL" >> "$GITHUB_STEP_SUMMARY"
+          node infra/scripts/backend-release.mjs
+        env:
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+          PLATFORM_REVISION_ONLY: 'true'
+      - name: Remove sensitive runner files
+        if: always()
+        run: |
+          rm -f production.tfplan plan-metadata.json plan-fingerprint.json infra/runtime.auto.tfvars.json
+          rm -f "$RUNNER_TEMP/terraform-plan.log" "$RUNNER_TEMP/terraform-apply.log"

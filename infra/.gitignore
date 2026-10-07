@@ -1,0 +1,11 @@
+.terraform/
+.tools/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!example.tfvars
+crash.log
+validation-output/
+runtime.auto.tfvars.json

@@ -1,0 +1,132 @@
+name: Backend deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [deploy, publish, bootstrap, rollback]
+        default: deploy
+      prepared_image:
+        description: Previously published immutable ACR digest (bootstrap only)
+        type: string
+      rollback_revision:
+        description: Retained known-good revision name (rollback only)
+        type: string
+      schema_compatibility_approved:
+        description: Human confirms rollback target remains compatible with current schema
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: >-
+      github.ref == 'refs/heads/main' && inputs.operation != 'rollback' &&
+      !(inputs.operation == 'bootstrap' && inputs.prepared_image != '')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: assignment
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Validate exact trusted release commit
+        working-directory: backend
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+      - name: Build backend Dockerfile
+        run: |
+          docker build --tag weather-backend:release --file backend/Dockerfile backend
+      - name: Report accepted assignment image findings
+        id: scan
+        continue-on-error: true
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa \
+            image --scanners vuln --severity HIGH,CRITICAL --exit-code 0 weather-backend:release
+      - if: steps.scan.outcome == 'failure'
+        run: echo "::warning::Trivy reporting failed; scan is nonblocking for this explicitly accepted temporary assignment."
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Publish locked traceable tag and resolve digest
+        id: image
+        run: |
+          tag="$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          az acr login --name "$ACR_NAME" --only-show-errors
+          docker tag weather-backend:release "$ACR_LOGIN_SERVER/weather-backend:$tag"
+          docker push "$ACR_LOGIN_SERVER/weather-backend:$tag"
+          digest=$(az acr repository show --name "$ACR_NAME" --image "weather-backend:$tag" --query digest --output tsv --only-show-errors)
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
+          az acr repository update --name "$ACR_NAME" --image "weather-backend:$tag" \
+            --write-enabled false --only-show-errors --output none
+          echo "image=$ACR_LOGIN_SERVER/weather-backend@$digest" >> "$GITHUB_OUTPUT"
+          echo "Backend artifact: \`$ACR_LOGIN_SERVER/weather-backend@$digest\`" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    needs: publish
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      inputs.operation != 'publish' &&
+      (needs.publish.result == 'success' || inputs.operation == 'rollback' ||
+       (inputs.operation == 'bootstrap' && inputs.prepared_image != ''))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: assignment
+    concurrency:
+      group: weather-production-mutation
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACA_APP_NAME: ${{ vars.ACA_APP_NAME }}
+      MIGRATION_JOB_NAME: ${{ vars.MIGRATION_JOB_NAME }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+      RELEASE_IMAGE: ${{ inputs.operation == 'bootstrap' && inputs.prepared_image != '' && inputs.prepared_image || needs.publish.outputs.image }}
+      ROLLBACK_REVISION: ${{ inputs.operation == 'rollback' && inputs.rollback_revision || '' }}
+      SCHEMA_COMPATIBILITY_APPROVED: ${{ inputs.schema_compatibility_approved }}
+      BOOTSTRAP_ONLY: ${{ inputs.operation == 'bootstrap' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Migrate, validate candidate, promote and observe or recover
+        run: node infra/scripts/backend-release.mjs
+      - name: Retain sanitized release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: backend-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-receipt.json
+          retention-days: 30
+          if-no-files-found: warn

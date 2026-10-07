@@ -1,0 +1,60 @@
+name: Application CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['frontend/**', 'backend/**', 'infra/**', '.github/workflows/**']
+  push:
+    branches: [main]
+    paths: ['frontend/**', 'backend/**', 'infra/**', '.github/workflows/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  applications:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        application: [frontend, backend]
+    defaults:
+      run:
+        working-directory: ${{ matrix.application }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+          cache: npm
+          cache-dependency-path: ${{ matrix.application }}/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          VITE_API_BASE_URL: /api/v1
+      - if: matrix.application == 'backend'
+        run: docker build --tag weather-backend:ci --file Dockerfile .
+
+  infrastructure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: '1.16.5'
+          terraform_wrapper: false
+      - run: terraform -chdir=infra fmt -check -recursive
+      - run: terraform -chdir=infra init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra validate
+      - run: terraform -chdir=infra/state init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/state validate
+      - run: node --test infra/test/*.test.mjs
