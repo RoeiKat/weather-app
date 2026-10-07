@@ -4,7 +4,7 @@ import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { validateCredentials } from './AuthForm'
-import { forecastLabel } from './forecast'
+import { forecastDate, forecastLabel, groupForecast } from './forecast'
 import { anonymous, errorBody, preference, signedIn, weather } from './test/fixtures'
 
 const saveName = `Save forecast for Stockholm, ${forecastLabel(weather.forecast[0].forecastAt, weather.timezoneOffsetSeconds)}`
@@ -37,12 +37,27 @@ async function searchCity(name = 'Stockholm') {
   await user.type(screen.getByLabelText('City'), name)
   await user.click(screen.getByRole('button', { name: 'Show forecast' }))
 }
+async function findForecastText(text: string) {
+  return within(await screen.findByRole('region', { name: 'Selected forecast' })).findByText(text)
+}
+async function selectPoint(index: number) {
+  const point = weather.forecast[index]
+  await userEvent.click(within(screen.getByRole('group', { name: 'Forecast days' })).getByRole('button', {
+    name: forecastDate(point.forecastAt, weather.timezoneOffsetSeconds),
+  }))
+  await userEvent.click(screen.getByRole('button', {
+    name: `${forecastLabel(point.forecastAt, weather.timezoneOffsetSeconds)}, ${point.temperatureC} °C, ${point.condition.description}`,
+  }))
+}
 beforeEach(() => {
   window.history.replaceState(null, '', '/')
   localStorage.clear()
   sessionStorage.clear()
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
 
 describe('weather and authentication journeys', () => {
   it('shares bootstrap across StrictMode effect replay so cookie/token responses cannot race', async () => {
@@ -59,26 +74,36 @@ describe('weather and authentication journeys', () => {
     mockApi((url) => url.endsWith('/auth/session') ? json(errorBody('SERVICE_UNAVAILABLE'), 503) : json(weather))
     render(<App />)
     expect(await screen.findByRole('button', { name: 'Retry session' })).toBeVisible()
-    expect(screen.queryByRole('link', { name: 'Register' })).not.toBeInTheDocument()
+    expect(screen.getByText('Account unavailable')).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Register' })).toBeVisible()
     await searchCity()
     expect(await screen.findByRole('heading', { name: 'Stockholm, SE' })).toBeVisible()
     expect(screen.queryByText(/to save this forecast/)).not.toBeInTheDocument()
   })
 
-  it('renders the full anonymous multi-day forecast with city-local times and UTC retrieval time', async () => {
+  it('exposes every city-local day but renders only the selected day, with UTC retrieval time', async () => {
     mockApi()
     render(<App />)
     expect(await screen.findByRole('link', { name: 'Register' })).toBeVisible()
     expect(screen.getByText(/Search for a city to see/)).toBeVisible()
     await searchCity()
-    expect(await screen.findByText('Overcast clouds')).toBeVisible()
-    expect(screen.getByText('12.4 °C')).toBeVisible()
+    expect(await findForecastText('Overcast clouds')).toBeVisible()
+    expect(within(screen.getByRole('list', { name: /forecast points/ })).getByRole('button', { pressed: true })).toHaveTextContent('12.4 °C')
     expect(screen.getByText(/City time: UTC\+02:00/)).toBeVisible()
     expect(screen.getByText(/Retrieved at/)).toHaveTextContent('UTC')
-    expect(screen.getAllByText('23:00')).toHaveLength(5)
-    expect(screen.getAllByRole('heading', { level: 4 })).toHaveLength(6)
-    expect(screen.getAllByText('Partial day - available times')).toHaveLength(2)
-    expect(screen.getByRole('region', { name: 'Multi-day forecast' }).querySelectorAll('.forecast-rows li')).toHaveLength(40)
+    const selector = within(screen.getByRole('group', { name: 'Forecast days' }))
+    expect(selector.getAllByRole('button')).toHaveLength(6)
+    expect(screen.getAllByRole('heading', { level: 4 })).toHaveLength(1)
+    expect(screen.getByText(/Partial day - available times/)).toBeVisible()
+    const groups = groupForecast(weather)
+    for (const day of groups) {
+      await userEvent.click(selector.getByRole('button', { name: day.label }))
+      expect(screen.getByRole('region', { name: 'Multi-day forecast' }).querySelectorAll('.forecast-rows li')).toHaveLength(day.points.length)
+      expect(screen.getByRole('heading', { level: 4 })).toHaveTextContent(day.label)
+      expect(within(screen.getByRole('list', { name: /forecast points/ })).getByRole('button', { pressed: true }))
+        .toHaveAccessibleName(new RegExp(day.points[0].condition.description))
+    }
+    expect(groups.flatMap((day) => day.points)).toHaveLength(40)
     expect(screen.getByText(/Coordinates: 59.3293, 18.0686/)).toBeVisible()
     expect(screen.queryByRole('button', { name: saveName })).not.toBeInTheDocument()
   })
@@ -96,16 +121,94 @@ describe('weather and authentication journeys', () => {
     expect(screen.getByLabelText('Country code (optional)')).toHaveFocus()
   })
 
+  it('selects with the keyboard without moving focus, updates the whole hero, and saves unrounded values', async () => {
+    const point = {
+      ...weather.forecast[1], temperatureC: 11.234,
+      condition: { code: 'snow' as const, description: 'Light snow' },
+    }
+    const selectedWeather = { ...weather, forecast: [weather.forecast[0], point, ...weather.forecast.slice(2)] }
+    const snapshot = { forecastAt: point.forecastAt, temperatureC: point.temperatureC, description: point.condition.description }
+    const fetch = mockApi((url, options) => {
+      if (url.includes('/weather')) return json(selectedWeather)
+      if (url === '/api/v1/preferences' && options.method === 'POST') return json({ preference: { ...preference, snapshot } }, 201)
+      return defaults(url, options)
+    })
+    render(<App />)
+    await searchCity()
+    await userEvent.click(within(await screen.findByRole('group', { name: 'Forecast days' })).getByRole('button', {
+      name: forecastDate(point.forecastAt, weather.timezoneOffsetSeconds),
+    }))
+    await selectPoint(2)
+    const control = await screen.findByRole('button', {
+      name: `${forecastLabel(point.forecastAt, weather.timezoneOffsetSeconds)}, 11.2 °C, Light snow`,
+    })
+    control.focus()
+    expect(control).toHaveAttribute('aria-pressed', 'false')
+    await userEvent.keyboard('{Enter}')
+    expect(control).toHaveFocus()
+    expect(within(screen.getByRole('list', { name: /forecast points/ })).getAllByRole('button', { pressed: true })).toEqual([control])
+    const hero = within(screen.getByRole('region', { name: 'Selected forecast' }))
+    expect(hero.getByText('11.2')).toBeVisible()
+    expect(hero.getByText('Light snow')).toBeVisible()
+    expect(hero.getByText(forecastLabel(point.forecastAt, weather.timezoneOffsetSeconds))).toBeVisible()
+    await userEvent.click(hero.getByRole('button', { name: `Save forecast for Stockholm, ${forecastLabel(point.forecastAt, weather.timezoneOffsetSeconds)}` }))
+    await screen.findByText('Forecast saved.')
+    const save = fetch.mock.calls.find(([url, options]) => url === '/api/v1/preferences' && options.method === 'POST')!
+    expect(JSON.parse(String(save[1].body))).toEqual({ location: weather.location, snapshot })
+  })
+
+  it('replaces previous weather with noninteractive skeletons during a fresh lookup', async () => {
+    let resolveWeather!: (response: Response) => void
+    let lookups = 0
+    mockApi((url, options) => url.includes('/weather')
+      ? ++lookups === 1 ? json(weather) : new Promise((resolve) => { resolveWeather = resolve })
+      : defaults(url, options))
+    render(<App />)
+    await searchCity()
+    await findForecastText('Overcast clouds')
+    await selectPoint(1)
+    await searchCity('Another city')
+    expect(screen.queryByRole('region', { name: 'Selected forecast' })).not.toBeInTheDocument()
+    const region = screen.getByRole('region', { name: 'Multi-day forecast' })
+    expect(region).toHaveAttribute('aria-busy', 'true')
+    expect(region.querySelectorAll('[aria-hidden="true"] button')).toHaveLength(0)
+    await act(async () => { resolveWeather(json(weather)) })
+    expect(await findForecastText('Overcast clouds')).toBeVisible()
+    expect(within(screen.getByRole('list', { name: /forecast points/ })).getByRole('button', { pressed: true })).toHaveAccessibleName(/Overcast clouds/)
+  })
+
   it('shows weather loading, prevents duplicate submission, and never invents a result', async () => {
     let resolveWeather!: (response: Response) => void
     mockApi((url) => url.includes('/weather') ? new Promise((resolve) => { resolveWeather = resolve }) : json(anonymous))
     render(<App />)
     await searchCity()
-    expect(screen.getByText('Loading a fresh forecast…')).toBeVisible()
-    expect(screen.getByRole('button', { name: /Show forecast/ })).toBeDisabled()
+    expect(screen.getByText('Loading a fresh forecast…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Loading forecast...' })).toBeDisabled()
+    expect(screen.getByRole('region', { name: 'Multi-day forecast' })).toHaveAttribute('aria-busy', 'true')
     expect(screen.queryByText('12.4')).not.toBeInTheDocument()
     await act(async () => { resolveWeather(json(weather)) })
-    expect(await screen.findByText('Overcast clouds')).toBeVisible()
+    expect(await findForecastText('Overcast clouds')).toBeVisible()
+  })
+
+  it('respects Retry-After without issuing automatic forecast requests', async () => {
+    vi.useFakeTimers()
+    const fetch = mockApi((url) => url.includes('/weather')
+      ? new Response(JSON.stringify(errorBody('WEATHER_UNAVAILABLE', 'Forecast is unavailable.')), {
+        status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '3' },
+      }) : json(anonymous))
+    render(<App />)
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('City'), { target: { value: 'Stockholm' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Show forecast' }))
+    })
+    expect(screen.getByRole('button', { name: 'Retry forecast (3s)' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Try again in 3s' })).toBeDisabled()
+    act(() => { vi.advanceTimersByTime(2999) })
+    expect(screen.getByRole('button', { name: 'Retry forecast (1s)' })).toBeDisabled()
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(screen.getByRole('button', { name: 'Retry forecast' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Show forecast' })).toBeEnabled()
+    expect(fetch.mock.calls.filter(([url]) => url.includes('/weather'))).toHaveLength(1)
   })
 
   it('retains a clearly marked previous forecast and can save its explicit snapshot during a provider outage', async () => {
@@ -118,7 +221,7 @@ describe('weather and authentication journeys', () => {
     })
     render(<App />)
     await searchCity()
-    await screen.findByText('Overcast clouds')
+    await findForecastText('Overcast clouds')
     await searchCity('Another city')
     expect(await screen.findByText('Forecast is unavailable.')).toBeVisible()
     expect(screen.getByText('Previous forecast - not the latest lookup')).toBeVisible()
@@ -134,14 +237,14 @@ describe('weather and authentication journeys', () => {
     expect(save[1].body).toBe(JSON.stringify({ location: weather.location, snapshot: preference.snapshot }))
   })
 
-  it('explains no match and displays retry timing/diagnostic references', async () => {
+  it('explains no match without exposing diagnostic references', async () => {
     mockApi((url) => url.includes('/weather')
       ? json(errorBody('LOCATION_NOT_FOUND', 'No matching city.'), 404) : json(anonymous))
     render(<App />)
     await searchCity('Nowhere')
     expect(await screen.findByText(/Check the city spelling/)).toBeVisible()
     expect(screen.getByRole('alert')).toHaveFocus()
-    expect(screen.getByText('Reference: req_synthetic')).toBeVisible()
+    expect(screen.queryByText('Reference: req_synthetic')).not.toBeInTheDocument()
     expect(screen.getByLabelText('City')).toHaveValue('Nowhere')
   })
 
@@ -213,6 +316,7 @@ describe('weather and authentication journeys', () => {
     await userEvent.click(await screen.findByRole('button', { name: saveName }))
     expect(await screen.findByRole('button', { name: savedName })).toBeDisabled()
     const secondName = `Save forecast for Stockholm, ${forecastLabel(secondPoint.forecastAt, weather.timezoneOffsetSeconds)}`
+    await selectPoint(1)
     expect(screen.getByRole('button', { name: secondName })).toBeEnabled()
     await userEvent.click(screen.getByRole('button', { name: secondName }))
     expect(await screen.findByRole('button', { name: secondName.replace('Save forecast', 'Saved forecast') })).toBeDisabled()
@@ -229,7 +333,7 @@ describe('weather and authentication journeys', () => {
     ])
   })
 
-  it('disables only the pending forecast point and confirms a save only after success', async () => {
+  it('keeps a pending save tied to its point when another point is selected', async () => {
     let resolveSave!: (response: Response) => void
     mockApi((url, options) => url === '/api/v1/preferences' && options.method === 'POST'
       ? new Promise((resolve) => { resolveSave = resolve }) : defaults(url, options))
@@ -238,10 +342,15 @@ describe('weather and authentication journeys', () => {
     await userEvent.click(await screen.findByRole('button', { name: saveName }))
     expect(screen.getByRole('button', { name: saveName })).toBeDisabled()
     expect(screen.queryByRole('button', { name: savedName })).not.toBeInTheDocument()
+    await selectPoint(1)
     expect(screen.getByRole('button', {
       name: `Save forecast for Stockholm, ${forecastLabel(weather.forecast[1].forecastAt, weather.timezoneOffsetSeconds)}`,
     })).toBeEnabled()
     await act(async () => { resolveSave(json({ preference }, 201)) })
+    expect(screen.getByRole('button', {
+      name: `Save forecast for Stockholm, ${forecastLabel(weather.forecast[1].forecastAt, weather.timezoneOffsetSeconds)}`,
+    })).toBeEnabled()
+    await selectPoint(0)
     expect(await screen.findByRole('button', { name: savedName })).toBeDisabled()
   })
 
@@ -267,10 +376,10 @@ describe('weather and authentication journeys', () => {
     const open = await screen.findByRole('button', { name: /Open fresh forecast for Stockholm/ })
     expect(lookups).toBe(0)
     await userEvent.click(open)
-    expect(await screen.findByText('Fresh prediction 1')).toBeVisible()
+    expect(await findForecastText('Fresh prediction 1')).toBeVisible()
     expect(screen.getByRole('heading', { level: 2, name: 'Stockholm, SE' })).toHaveFocus()
     await userEvent.click(open)
-    expect(await screen.findByText('Fresh prediction 2')).toBeVisible()
+    expect(await findForecastText('Fresh prediction 2')).toBeVisible()
     expect(lookups).toBe(2)
     const savedRegion = within(screen.getByRole('region', { name: 'Saved forecasts' }))
     expect(savedRegion.getByText('Stored winter snapshot')).toBeVisible()
@@ -332,7 +441,7 @@ describe('weather and authentication journeys', () => {
     await userEvent.click(await screen.findByRole('button', { name: saveName }))
     expect(await screen.findByText(/Your session expired/)).toBeVisible()
     await screen.findByRole('link', { name: 'Register' })
-    expect(screen.getByText('Overcast clouds')).toBeVisible()
+    expect(within(screen.getByRole('region', { name: 'Selected forecast' })).getByText('Overcast clouds')).toBeVisible()
     expect(screen.queryByRole('button', { name: saveName })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Open fresh forecast for Private saved city/ })).not.toBeInTheDocument()
     expect(fetch.mock.calls.filter(([url, options]) => url === '/api/v1/preferences' && options.method === 'POST')).toHaveLength(1)
@@ -424,11 +533,33 @@ describe('weather and authentication journeys', () => {
     render(<App />)
     await userEvent.click(await screen.findByRole('link', { name: 'Register' }))
     expect(window.location.pathname).toBe('/register')
-    expect(screen.getByRole('heading', { level: 1, name: 'Register' })).toHaveFocus()
+    expect(screen.getByRole('heading', { level: 1, name: 'Create your account' })).toHaveFocus()
     window.history.replaceState(null, '', '/login/')
     fireEvent.popState(window)
-    expect(screen.getByRole('heading', { level: 1, name: 'Log in' })).toHaveFocus()
+    expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toHaveFocus()
     expect(within(screen.getByRole('main')).getByLabelText('Password')).toHaveAttribute('autocomplete', 'current-password')
+  })
+
+  it('shows one password message and integrates the visibility control without changing spaces', async () => {
+    window.history.replaceState(null, '', '/register')
+    const fetch = mockApi()
+    render(<App />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Register' })).toBeEnabled())
+    const password = screen.getByLabelText('Password')
+    expect(password).toHaveAccessibleDescription('Use 12-128 characters. Spaces are preserved.')
+    await userEvent.type(screen.getByLabelText('Email'), 'reader@example.test')
+    await userEvent.type(password, '  short  ')
+    await userEvent.click(screen.getByRole('button', { name: 'Register' }))
+    expect(password).toHaveFocus()
+    expect(password).toHaveAccessibleDescription('Use 12-128 characters.')
+    expect(screen.queryByText('Use 12-128 characters. Spaces are preserved.')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Use 12-128 characters.')).toHaveLength(1)
+    await userEvent.click(screen.getByRole('button', { name: 'Show password' }))
+    expect(password).toHaveAttribute('type', 'text')
+    expect(password).toHaveValue('  short  ')
+    await userEvent.click(screen.getByRole('button', { name: 'Hide password' }))
+    expect(password).toHaveAttribute('type', 'password')
+    expect(fetch.mock.calls.some(([url]) => url.endsWith('/auth/register'))).toBe(false)
   })
 })
 

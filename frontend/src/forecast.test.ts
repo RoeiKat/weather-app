@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { forecastLabel, forecastTime, groupForecast, selectionKey, utcOffsetLabel, utcTimestamp } from './forecast'
+import { forecastDayShort, forecastLabel, forecastTime, groupForecast, selectionKey, utcOffsetLabel, utcTimestamp } from './forecast'
 import { weather } from './test/fixtures'
 
 describe('city-offset forecast presentation', () => {
@@ -20,6 +20,9 @@ describe('city-offset forecast presentation', () => {
     expect(groupForecast(negative)[0].date).toBe('2026-10-07')
     expect(forecastTime(weather.forecast[1].forecastAt, -43200)).toBe('12:00')
     expect(forecastLabel(weather.forecast[0].forecastAt, 19800)).toContain('02:30 (UTC+05:30)')
+    expect(forecastDayShort(weather.forecast[0].forecastAt, 19800)).toBe('Thu 8')
+    expect(forecastDayShort(weather.forecast[1].forecastAt, -43200)).toBe('Wed 7')
+    expect(forecastDayShort('2026-10-07T23:59:50Z', 15)).toBe('Thu 8')
   })
 
   it('labels whole, fractional and extreme supplied offsets, without inferring DST', () => {

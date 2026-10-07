@@ -24,6 +24,12 @@ export function forecastDate(timestamp: string, offset: number) {
   }).format(cityDate(timestamp, offset))
 }
 
+export function forecastDayShort(timestamp: string, offset: number) {
+  const date = cityDate(timestamp, offset)
+  const weekday = new Intl.DateTimeFormat('en', { timeZone: 'UTC', weekday: 'short' }).format(date)
+  return `${weekday} ${date.getUTCDate()}`
+}
+
 export function forecastLabel(timestamp: string, offset: number) {
   return `${forecastDate(timestamp, offset)} at ${forecastTime(timestamp, offset)} (${utcOffsetLabel(offset)})`
 }

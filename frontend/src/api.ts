@@ -1,58 +1,61 @@
-import { z } from 'zod'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
-const nonempty = z.string().min(1)
-const utcDate = z.iso.datetime()
-const userSchema = z.strictObject({ id: nonempty, email: nonempty })
-const authSchema = z.strictObject({ user: userSchema.nullable(), csrfToken: nonempty })
-const locationSchema = z.strictObject({
-  name: z.string().min(1).max(100).refine((name) => name === name.trim()),
-  countryCode: z.string().regex(/^[A-Z]{2}$/).nullable(),
-  latitude: z.number().min(-90).max(90),
-  longitude: z.number().min(-180).max(180),
-})
-const forecastPointSchema = z.strictObject({
-  forecastAt: utcDate,
-  temperatureC: z.number(),
-  condition: z.strictObject({
-    code: z.enum(['clear', 'cloudy', 'rain', 'drizzle', 'thunderstorm', 'snow', 'mist', 'other']),
-    description: z.string().min(1).max(200),
-  }),
-})
-const weatherSchema = z.strictObject({
-  location: locationSchema,
-  units: z.literal('metric'),
-  fetchedAt: utcDate,
-  timezoneOffsetSeconds: z.number().int().min(-43200).max(50400),
-  forecast: z.array(forecastPointSchema).min(1).refine((points) =>
-    points.every((point, index) => index === 0 || Date.parse(point.forecastAt) > Date.parse(points[index - 1].forecastAt))),
-})
-const snapshotSchema = z.strictObject({
-  forecastAt: utcDate,
-  temperatureC: z.number(),
-  description: z.string().min(1).max(200),
-})
-const preferenceSchema = z.strictObject({
-  id: nonempty,
-  location: locationSchema,
-  snapshot: snapshotSchema,
-  createdAt: utcDate,
-})
-const errorSchema = z.strictObject({
-  error: z.strictObject({
-    code: nonempty,
-    message: nonempty,
-    requestId: nonempty,
-    fields: z.array(z.strictObject({ field: nonempty, message: nonempty })).min(1).optional(),
-  }),
-})
+export interface User {
+  id: string
+  email: string
+}
 
-export type AuthState = z.infer<typeof authSchema>
-export type Location = z.infer<typeof locationSchema>
-export type ForecastResponse = z.infer<typeof weatherSchema>
-export type ForecastPoint = z.infer<typeof forecastPointSchema>
-export type ForecastSnapshot = z.infer<typeof snapshotSchema>
-export type Preference = z.infer<typeof preferenceSchema>
+export interface AuthState {
+  user: User | null
+  csrfToken: string
+}
+
+export interface Location {
+  name: string
+  countryCode: string | null
+  latitude: number
+  longitude: number
+}
+
+export interface ForecastPoint {
+  forecastAt: string
+  temperatureC: number
+  condition: {
+    code: 'clear' | 'cloudy' | 'rain' | 'drizzle' | 'thunderstorm' | 'snow' | 'mist' | 'other'
+    description: string
+  }
+}
+
+export interface ForecastResponse {
+  location: Location
+  units: 'metric'
+  fetchedAt: string
+  timezoneOffsetSeconds: number
+  forecast: ForecastPoint[]
+}
+
+export interface ForecastSnapshot {
+  forecastAt: string
+  temperatureC: number
+  description: string
+}
+
+export interface Preference {
+  id: string
+  location: Location
+  snapshot: ForecastSnapshot
+  createdAt: string
+}
+
 export type FieldError = { field: string; message: string }
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isFieldError(value: unknown): value is FieldError {
+  return isObject(value) && typeof value.field === 'string' && typeof value.message === 'string'
+}
 
 export class ApiError extends Error {
   constructor(
@@ -68,17 +71,13 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(
-  path: string,
-  schema: z.ZodType<T>,
-  statuses: number[],
-  options: RequestInit = {},
-): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (!API_BASE_URL) throw new ApiError('The API base URL is not configured.', 0, 'CONFIGURATION_ERROR')
   let response: Response
   try {
-    response = await fetch(`/api/v1${path}`, {
+    response = await fetch(`${API_BASE_URL}${path}`, {
       ...options,
-      credentials: 'same-origin',
+      credentials: 'include',
       cache: 'no-store',
       headers: { Accept: 'application/json', ...options.headers },
     })
@@ -86,7 +85,7 @@ async function request<T>(
     if (options.signal?.aborted || ((error instanceof Error || error instanceof DOMException) && error.name === 'AbortError')) throw error
     throw new ApiError('Could not connect to the service. Check your connection and try again.')
   }
-  if (response.status === 204 && statuses.includes(204)) return schema.parse(undefined)
+  if (response.status === 204) return undefined as T
 
   let body: unknown
   try {
@@ -95,22 +94,21 @@ async function request<T>(
     throw new ApiError('The service returned an unreadable response. Please try again.', response.status, 'SERVICE_RESPONSE_ERROR')
   }
   if (!response.ok) {
-    const result = errorSchema.safeParse(body)
-    if (!result.success) {
+    const error = isObject(body) ? body.error : undefined
+    if (!isObject(error) || typeof error.code !== 'string' || typeof error.message !== 'string' || typeof error.requestId !== 'string') {
       throw new ApiError('The service returned an unexpected error. Please try again.', response.status, 'SERVICE_RESPONSE_ERROR')
     }
-    const error = result.data.error
+    const fields = error.fields === undefined ? [] : error.fields
+    if (!Array.isArray(fields) || !fields.every(isFieldError)) {
+      throw new ApiError('The service returned an unexpected error. Please try again.', response.status, 'SERVICE_RESPONSE_ERROR')
+    }
     const retry = response.headers.get('Retry-After')
     throw new ApiError(
-      error.message, response.status, error.code, error.requestId, error.fields,
+      error.message, response.status, error.code, error.requestId, fields,
       retry && /^\d+$/.test(retry) ? Number(retry) : undefined,
     )
   }
-  const result = schema.safeParse(body)
-  if (!statuses.includes(response.status) || !result.success) {
-    throw new ApiError('The service returned an unexpected response. Please try again.', response.status, 'SERVICE_RESPONSE_ERROR')
-  }
-  return result.data
+  return body as T
 }
 
 function mutation(method: 'POST' | 'DELETE', csrfToken: string, body?: unknown): RequestInit {
@@ -126,23 +124,27 @@ function mutation(method: 'POST' | 'DELETE', csrfToken: string, body?: unknown):
 }
 
 export const api = {
-  session: () => request('/auth/session', authSchema, [200]),
+  session: () => request<AuthState>('/auth/session'),
   register: (email: string, password: string, token: string) =>
-    request('/auth/register', z.strictObject({ user: userSchema }), [201], mutation('POST', token, { email, password })),
+    request<{ user: User }>('/auth/register', mutation('POST', token, { email, password })),
   login: (email: string, password: string, token: string) =>
-    request('/auth/login', authSchema, [200], mutation('POST', token, { email, password })),
+    request<AuthState>('/auth/login', mutation('POST', token, { email, password })),
   logout: (token: string) =>
-    request('/auth/logout', z.undefined(), [204], mutation('POST', token)),
-  weather: (query: { q: string; countryCode?: string } | { latitude: number; longitude: number }, signal?: AbortSignal) => {
+    request<void>('/auth/logout', mutation('POST', token)),
+  weather: async (query: { q: string; countryCode?: string } | { latitude: number; longitude: number }, signal?: AbortSignal) => {
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(query)) params.set(key, String(value))
-    return request(`/weather?${params}`, weatherSchema, [200], { signal })
+    const result = await request<ForecastResponse>(`/weather?${params}`, { signal })
+    if (!result || !Array.isArray(result.forecast) || !result.forecast.length) {
+      throw new ApiError('The service returned no forecast. Please try again.', 502, 'SERVICE_RESPONSE_ERROR')
+    }
+    return result
   },
-  preferences: () => request('/preferences', z.strictObject({ preferences: z.array(preferenceSchema) }), [200]),
+  preferences: () => request<{ preferences: Preference[] }>('/preferences'),
   save: (location: Location, snapshot: ForecastSnapshot, token: string) =>
-    request('/preferences', z.strictObject({ preference: preferenceSchema }), [200, 201], mutation('POST', token, { location, snapshot })),
+    request<{ preference: Preference }>('/preferences', mutation('POST', token, { location, snapshot })),
   remove: (id: string, token: string) =>
-    request(`/preferences/${encodeURIComponent(id)}`, z.undefined(), [204], mutation('DELETE', token)),
+    request<void>(`/preferences/${encodeURIComponent(id)}`, mutation('DELETE', token)),
 }
 
 export function asApiError(error: unknown): ApiError {

@@ -9,17 +9,41 @@ function respond(body: unknown, status = 200, headers = {}) {
   vi.stubGlobal('fetch', fetch)
   return fetch
 }
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+})
 
 describe('backend-only API client', () => {
   it('bootstraps credentials without caching or browser storage', async () => {
     const fetch = respond(anonymous)
     expect(await api.session()).toEqual(anonymous)
     expect(fetch).toHaveBeenCalledWith('/api/v1/auth/session', expect.objectContaining({
-      credentials: 'same-origin', cache: 'no-store',
+      credentials: 'include', cache: 'no-store',
     }))
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)
+  })
+
+  it.each([
+    'http://localhost:3000/api/v1',
+    '/api/v1',
+  ])('uses the configured backend base URL %s with cookies', async (baseUrl) => {
+    vi.resetModules()
+    vi.stubEnv('VITE_API_BASE_URL', baseUrl)
+    const { api: configuredApi } = await import('./api')
+    const fetch = respond(anonymous)
+    await configuredApi.session()
+    expect(fetch).toHaveBeenCalledWith(`${baseUrl}/auth/session`, expect.objectContaining({ credentials: 'include' }))
+  })
+
+  it('reports missing API configuration instead of requesting an undefined URL', async () => {
+    vi.resetModules()
+    vi.stubEnv('VITE_API_BASE_URL', undefined)
+    const { api: configuredApi } = await import('./api')
+    const fetch = respond(anonymous)
+    await expect(configuredApi.session()).rejects.toMatchObject({ code: 'CONFIGURATION_ERROR' })
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('sends only contract city parameters and never adds units/provider parameters', async () => {
@@ -78,42 +102,14 @@ describe('backend-only API client', () => {
     })
   })
 
-  it.each([
-    { ...weather, units: 'imperial' },
-    { ...weather, forecast: [] },
-    { ...weather, forecast: [{ ...weather.forecast[0], condition: { code: 'provider-icon', description: 'Clouds' } }] },
-    { ...weather, fetchedAt: 'invalid-date' },
-    { ...weather, timezoneOffsetSeconds: null },
-    { ...weather, timezoneOffsetSeconds: 50401 },
-    { ...weather, timezoneOffsetSeconds: -43201 },
-    { ...weather, timezoneOffsetSeconds: 0.5 },
-    { ...weather, forecast: [{ ...weather.forecast[0], temperatureC: null }] },
-    { ...weather, forecast: [{ ...weather.forecast[0], forecastAt: 'invalid-date' }] },
-    { ...weather, forecast: [weather.forecast[1], weather.forecast[0]] },
-    { ...weather, forecast: [weather.forecast[0], weather.forecast[0]] },
-    { ...weather, forecast: [{ ...weather.forecast[0], feelsLikeC: 12 }] },
-    { ...weather, providerUrl: 'not-part-of-the-contract' },
-    { ...weather, location: { ...weather.location, name: ' Stockholm ' } },
-  ])('rejects invalid forecasts instead of dropping points or fabricating days', async (body) => {
-    respond(body)
-    await expect(api.weather({ q: 'Stockholm' })).rejects.toMatchObject({ code: 'SERVICE_RESPONSE_ERROR' })
-  })
-
   it('preserves the full 40-point horizon rather than selecting or aggregating days', async () => {
     respond(weather)
     expect(await api.weather({ q: 'Stockholm' })).toEqual(weather)
   })
 
-  it.each([
-    { id: preference.id, location: preference.location, createdAt: preference.createdAt },
-    { ...preference, snapshot: { ...preference.snapshot, forecastAt: 'invalid-date' } },
-    { ...preference, snapshot: { ...preference.snapshot, temperatureC: null } },
-    { ...preference, snapshot: { ...preference.snapshot, description: '' } },
-    { ...preference, snapshot: { ...preference.snapshot, description: 'x'.repeat(201) } },
-    { ...preference, snapshot: { ...preference.snapshot, condition: weather.forecast[0].condition } },
-  ])('requires the exact minimal saved snapshot instead of accepting legacy/raw records', async (saved) => {
-    respond({ preferences: [saved] })
-    await expect(api.preferences()).rejects.toMatchObject({ code: 'SERVICE_RESPONSE_ERROR' })
+  it('returns the backend saved snapshots without transforming them', async () => {
+    respond({ preferences: [preference] })
+    expect(await api.preferences()).toEqual({ preferences: [preference] })
   })
 
   it('handles non-JSON and malformed edge errors without showing raw content', async () => {
@@ -121,6 +117,18 @@ describe('backend-only API client', () => {
     await expect(api.session()).rejects.toMatchObject({ code: 'SERVICE_RESPONSE_ERROR' })
     respond({ unsafe: 'internal details' }, 500)
     await expect(api.session()).rejects.toMatchObject({ code: 'SERVICE_RESPONSE_ERROR' })
+  })
+
+  it.each([null, [], { error: 'internal detail' }, {
+    error: { ...errorBody('VALIDATION_ERROR').error, fields: [{ field: 'email', message: 123 }] },
+  }])('reports malformed error payloads explicitly', async (body) => {
+    respond(body, 500)
+    await expect(api.session()).rejects.toMatchObject({ code: 'SERVICE_RESPONSE_ERROR' })
+  })
+
+  it.each([null, {}, { ...weather, forecast: [] }])('reports absent forecast points instead of inventing weather', async (body) => {
+    respond(body)
+    await expect(api.weather({ q: 'Stockholm' })).rejects.toMatchObject({ code: 'SERVICE_RESPONSE_ERROR' })
   })
 
   it('handles network failures explicitly and propagates cancellation', async () => {

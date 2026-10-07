@@ -3,6 +3,8 @@
 **Current guidance:** The forecast/snapshot correction entry below supersedes
 the initial current-weather-only implementation. The original session is
 retained as historical evidence, not the current frontend specification.
+The API simplification entry supersedes the earlier Zod validation and
+development-proxy implementation.
 
 - **Title / date:** React + TypeScript static frontend; 2026-10-07.
 - **Author / human decision owner:** AI assistant using Copilot SDK in VS Code /
@@ -328,3 +330,94 @@ key/quota/attribution checks, actual backend integration, deployment routing/
 headers/caching and manual assistive-technology/zoom/cross-browser acceptance
 remain owner/release checks. The free product is now selected; the earlier
 open product-selection note is superseded, not a reason to use a paid API.
+
+## API simplification and environment configuration, 2026-10-07
+
+- **Author/tool/model:** AI assistant using Copilot SDK in VS Code; model Unknown.
+- **Human decision owner:** Requesting user.
+- **Prompt, faithful summary:** Simplify the small application's existing API
+  client without redesigning the UI or changing the contract. Remove Zod and
+  unnecessary response-schema validation; use ordinary TypeScript response
+  types and fetch. Read `VITE_API_BASE_URL` from `import.meta.env`, use
+  `http://localhost:3000/api/v1` locally and `/api/v1` in production, preserve
+  cookie credentials, CSRF and basic errors, add a public environment example,
+  remove API-validation-only dependencies, and run lint/types/tests/build.
+  Write only frontend files and this record; do not stage or commit.
+- **Decision:** Explicitly authorized by the user's request. No new framework,
+  dependency, backend hostname, API route or application feature was introduced.
+
+### Implementation changes
+
+- Replaced all Zod schemas and inferred DTO types with ordinary TypeScript
+  interfaces for users, sessions, locations, forecast points/responses,
+  snapshots, preferences and errors.
+- Kept one small fetch helper for cookie credentials, no-store requests,
+  JSON parsing, bodyless 204s, HTTP errors, cancellation and connection errors.
+  Removed response-schema parsing and endpoint success-status arrays.
+  Successful JSON is trusted to follow the backend contract; TypeScript
+  declarations do not provide runtime validation. Backend validation/
+  normalization remains authoritative.
+- Retained `ApiError` because the existing UI uses its code/fields/request ID/
+  retry hint for explicit errors and CSRF/session recovery. The only error
+  envelope check is a basic code/message check to avoid treating an unexpected
+  edge response as a known backend error. Existing mutation header/body
+  construction and missing-CSRF protection remain shared rather than copied.
+- Uses exactly `const API_BASE_URL = import.meta.env.VITE_API_BASE_URL`.
+  Fetch uses `credentials: 'include'` for both direct local-backend and
+  same-origin production cookies. Missing base configuration produces an
+  explicit configuration error, not an undefined URL or silent fallback.
+- Added [frontend/.env.example](../../frontend/.env.example) with
+  `VITE_API_BASE_URL=http://localhost:3000/api/v1`, and the tracked public
+  [production defaults](../../frontend/.env.production) with
+  `VITE_API_BASE_URL=/api/v1`. Updated the ignore rules to track these public
+  configuration files while keeping private local overrides ignored. Added
+  the normal Vite environment type declaration.
+- Removed the old `WEATHER_API_PROXY` Vite configuration. Local development
+  now uses the requested direct backend URL; production still uses Front Door
+  and does not embed a Container Apps hostname. Updated the
+  [frontend README](../../frontend/README.md) with environment setup, public
+  build-time variable handling and credentialed local Origin/CORS requirements.
+  The existing backend code was read only to confirm it has explicit
+  credentialed CORS/preflight handling; backend files were not changed.
+- Removed the direct Zod dependency and regenerated the frontend npm lockfile
+  using `npm install` after the manifest change. **Zod remains only as a
+  transitive development dependency of the existing React-hooks ESLint plugin
+  (including its zod-validation-error helper).** It is not a production
+  dependency, is not imported by frontend application code and is not in the
+  application bundle. Removing that lint tooling was neither needed nor
+  requested.
+- Removed tests of the intentionally deleted response schemas. Retained
+  transport/payload/CSRF and UI regressions; added tests for both configured
+  base URLs, cookie inclusion, missing configuration and unchanged saved
+  snapshot responses. No auth, forecast presentation or snapshot behavior was
+  redesigned.
+
+### Actual verification
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | Passed |
+| `npm run typecheck` | Passed |
+| `npm test` | Passed: 43 tests across three files |
+| `npm run build` | Passed without the old Zod annotation warnings |
+| `npm run test:e2e` | Passed: 6 Chromium tests, compact/tablet/desktop |
+| `npm ls zod --all` | Only the existing ESLint plugin's development dependency path |
+| `npm ls zod --omit=dev` | Empty production tree; npm's expected empty-query exit status was 1 |
+
+The production browser suite verifies same-origin API URLs and the existing
+cookie/CSRF, forecast, save/reopen/remove and logout journeys under the
+restrictive same-origin CSP. The production JS decreased from approximately
+332 KB / 102 KB gzip to **244 KB / 77 KB gzip** (35 transformed modules instead
+of 130); the UI stylesheet is unchanged. The static build still includes
+`index.html`, `404.html` and hashed assets under `/assets`.
+
+**Scope and remaining checks:** No contract, backend, infrastructure,
+workflows, UI design or root local-integration files were changed. Git
+status/diff and outside-scope/index fingerprints are checked against the
+pre-edit baseline without staging. The requesting user's simplification is
+approved; completed implementation/deployment acceptance remains pending.
+For live local use, configure the backend's explicit frontend Origin allowlist
+and cookie policy appropriately; no wildcard CORS or production security
+exception is introduced here. Live backend/provider/deployment integration
+was not tested by this frontend-only change. Frontend environment values are
+public and must never contain secrets.

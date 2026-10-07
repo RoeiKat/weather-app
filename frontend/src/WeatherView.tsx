@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { api, asApiError, type ApiError, type AuthState, type ForecastPoint, type ForecastResponse, type Preference } from './api'
-import { Card, ErrorMessage, Field, ForecastSummary, LocationName } from './components'
+import { Card, ErrorMessage, Field, ForecastSummary, LocationName, SavedSkeleton, WeatherArtwork, WeatherIcon, WeatherSkeleton, displayTemperature, useRetryDelay } from './components'
 import { forecastLabel, selectionKey, utcTimestamp } from './forecast'
 
 export function WeatherView({ session, sessionLoading, onFailure, loginLink }: {
@@ -36,6 +36,7 @@ export function WeatherView({ session, sessionLoading, onFailure, loginLink }: {
   const currentSession = useRef(session)
   const savedHeading = useRef<HTMLHeadingElement>(null)
   const userId = session?.user?.id ?? null
+  const retrySeconds = useRetryDelay(weatherError)
 
   useEffect(() => {
     currentSession.current = session
@@ -95,6 +96,7 @@ export function WeatherView({ session, sessionLoading, onFailure, loginLink }: {
   }, [weather])
 
   async function lookup(query: Parameters<typeof api.weather>[0], focusResult = false) {
+    if (retrySeconds) return
     search.current?.abort()
     const controller = new AbortController()
     search.current = controller
@@ -203,9 +205,9 @@ export function WeatherView({ session, sessionLoading, onFailure, loginLink }: {
 
   return (
     <>
-      <Card className="search-card">
-        <h2>Find a city forecast</h2>
-        <form className="search-form" onSubmit={submit} noValidate>
+      <Card className="my-5 space-y-3">
+        <h2 className="text-lg">Find a city forecast</h2>
+        <form className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto]" onSubmit={submit} noValidate>
           <Field id="city" label="City" placeholder="Stockholm" required value={city} error={fields.city}
             onChange={(event) => {
               setCity(event.target.value)
@@ -216,60 +218,76 @@ export function WeatherView({ session, sessionLoading, onFailure, loginLink }: {
               setCountry(event.target.value)
               if (submitted) setFields(validateSearch(city, event.target.value))
             }} />
-          <button type="submit" disabled={weatherLoading}>Show forecast{weatherLoading ? ' — loading' : ''}</button>
+          <button className="self-start sm:col-span-2 lg:col-span-1 lg:mt-8" type="submit" disabled={weatherLoading || retrySeconds > 0}>
+            {weatherLoading ? 'Loading forecast...' : retrySeconds ? `Try again in ${retrySeconds}s` : 'Show forecast'}
+          </button>
         </form>
       </Card>
-      <div className="dashboard">
-        <section className="weather-area" aria-label="Multi-day forecast" aria-busy={weatherLoading}>
-          <p role="status">{weatherLoading ? 'Loading a fresh forecast…' : ''}</p>
+      <div className="space-y-5">
+        <p className="sr-only" role="status">{saving.length ? 'Saving...' : removing.length ? 'Removing...' : ''}</p>
+        <section className="min-w-0" aria-label="Multi-day forecast" aria-busy={weatherLoading}>
+          <p className="sr-only" role="status">{weatherLoading ? 'Loading a fresh forecast…' : ''}</p>
           <ErrorMessage error={weatherError} />
-          {weatherError && lastQuery && <button className="secondary" disabled={weatherLoading} onClick={() => { void lookup(lastQuery) }}>Retry forecast</button>}
-          <ErrorMessage error={saveError} />
-          {weather && sessionLoading && <p role="status">Checking your session…</p>}
-          {weather ? (
-            <ForecastSummary weather={weather} previous={previous} headingRef={forecastHeading} renderAction={(point) => {
-              if (sessionLoading) return null
-              if (!session?.user) return <p className="supporting">{loginLink} to save this forecast.</p>
+          {weatherError && lastQuery && <button className="secondary mb-6" disabled={weatherLoading || retrySeconds > 0} onClick={() => { void lookup(lastQuery) }}>
+            Retry forecast{retrySeconds ? ` (${retrySeconds}s)` : ''}
+          </button>}
+          {weatherLoading ? <WeatherSkeleton weather={weather} /> : weather ? (
+            <ForecastSummary weather={weather} previous={previous} headingRef={forecastHeading} actionError={saveError} renderAction={(point) => {
+              if (sessionLoading) return <p className="text-sm text-muted">Account actions are unavailable while your session is being checked.</p>
+              if (!session?.user) return <p className="text-sm text-muted">{loginLink} to save this forecast.</p>
               const key = selectionKey(weather.location, point.forecastAt)
               const saved = savedKeys.has(key)
               const pending = saving.includes(key)
-              return <button disabled={saved || pending || weatherLoading || !preferenceReady || preferenceLoading}
+              return <button className="w-full" disabled={saved || pending || !preferenceReady || preferenceLoading}
                 aria-label={`${saved ? 'Saved forecast' : 'Save forecast'} for ${weather.location.name}, ${forecastLabel(point.forecastAt, weather.timezoneOffsetSeconds)}`}
                 onClick={() => { void save(point) }}>
-                {saved ? 'Saved' : pending ? 'Save forecast — saving' : 'Save forecast'}
+                {saved ? 'Saved' : pending ? 'Saving...' : 'Save forecast'}
               </button>
             }} />
           ) : (
-            <Card className="weather-placeholder">
-              <h2>{weatherLoading ? 'Finding your forecast' : 'The coming days, at a glance'}</h2>
-              <p>{weatherLoading ? 'Please wait for your lookup to complete.' : 'Search for a city to see its five-day / three-hour forecast in Celsius.'}</p>
+            <Card className="flex items-center gap-3 bg-gradient-to-br from-blue-100 via-sky-50 to-blue-50 sm:gap-6">
+              <WeatherArtwork className="w-20 shrink-0 sm:w-44" />
+              <div className="space-y-2">
+                <p className="text-xs font-semibold tracking-widest text-primary">A LOOK AHEAD</p>
+                <h2 className="text-lg sm:text-2xl">The coming days, at a glance</h2>
+                <p className="max-w-lg text-sm text-muted">Search for a city to see its five-day / three-hour forecast in Celsius.</p>
+              </div>
             </Card>
           )}
-          <p className="supporting attribution">Forecast data by <a href="https://openweathermap.org/" rel="noreferrer">OpenWeather</a>. Free five-day / three-hour forecast.</p>
+          <p className="mt-2 text-xs text-muted">Forecast data by <a href="https://openweathermap.org/" rel="noreferrer">OpenWeather</a>. Free five-day / three-hour forecast.</p>
         </section>
-        <section className="saved-area" aria-labelledby="saved-heading" aria-busy={preferenceLoading}>
-          <Card>
-            <h2 id="saved-heading" tabIndex={-1} ref={savedHeading}>Saved forecasts</h2>
-            <p role="status">{notice}</p>
-            {sessionLoading && <p role="status">Checking your session…</p>}
-            {!sessionLoading && !session?.user && <p>{loginLink} to save a specific forecast point and find it here next time.</p>}
+        <section className="min-w-0" aria-labelledby="saved-heading" aria-busy={preferenceLoading || sessionLoading}>
+          <div className="rounded-3xl bg-blue-100/50 p-5 sm:p-6">
+            <h2 className="text-xl" id="saved-heading" tabIndex={-1} ref={savedHeading}>Saved forecasts</h2>
+            <p className="mt-2 text-sm text-muted">Your saved moments, kept separately from fresh forecasts.</p>
+            <p className={notice ? 'message success' : ''} role="status">{notice}</p>
+            {sessionLoading && <p className="mt-4 text-sm text-muted">Saved forecasts are unavailable until your session is ready.</p>}
+            {!sessionLoading && !session?.user && <p className="mt-4 text-muted">{loginLink} to save a specific forecast point and find it here next time.</p>}
             {session?.user && (
               <>
                 <ErrorMessage error={preferenceError} />
                 {preferenceError && <button className="secondary" disabled={preferenceLoading} onClick={() => { void loadPreferences() }}>Reload saved forecasts</button>}
-                {preferenceLoading && <p role="status">Loading saved forecasts…</p>}
-                {preferenceReady && !preferenceLoading && !visiblePreferences.length && <p>No saved forecasts yet. Search for a city, then select Save forecast beside a time.</p>}
-                <ul className="saved-list">
-                  {visiblePreferences.map((preference) => (
-                    <li key={preference.id}>
-                      <h3><LocationName location={preference.location} /></h3>
-                      <p className="supporting">Coordinates: {preference.location.latitude}, {preference.location.longitude}</p>
-                      <p><strong>Saved forecast snapshot</strong></p>
-                      <p>Forecast time: <time dateTime={preference.snapshot.forecastAt}>{utcTimestamp(preference.snapshot.forecastAt)}</time></p>
-                      <p className="snapshot-temperature">{preference.snapshot.temperatureC} °C</p>
-                      <p>{preference.snapshot.description}</p>
-                      <p className="supporting">Saved at <time dateTime={preference.createdAt}>{utcTimestamp(preference.createdAt)}</time></p>
-                      <button className="secondary" aria-label={`Open fresh forecast for ${preference.location.name}, saved ${utcTimestamp(preference.snapshot.forecastAt)}`} onClick={() => {
+                <p className="sr-only" role="status">{preferenceLoading ? 'Loading saved forecasts…' : ''}</p>
+                {preferenceLoading && <div className="mt-4"><SavedSkeleton /></div>}
+                {preferenceReady && !preferenceLoading && !preferenceError && !visiblePreferences.length && <p className="mt-4 rounded-2xl bg-tint p-4 text-muted">No saved forecasts yet. Save a forecast point to see it here. <a href="#city">Search for a city</a></p>}
+                <ul className="mt-4 grid gap-3 md:grid-cols-2">
+                  {!preferenceLoading && visiblePreferences.map((preference) => (
+                    <li key={preference.id} className="flex min-w-0 flex-col gap-3 rounded-2xl bg-gradient-to-br from-white to-blue-50 p-4 shadow-surface">
+                      <div className="min-w-0 space-y-2">
+                        <p className="w-fit rounded-full bg-tint px-3 py-1 text-xs font-semibold text-primary">Saved forecast snapshot</p>
+                        <h3><LocationName location={preference.location} /></h3>
+                        <p className="text-xs text-muted">Forecast time: <time dateTime={preference.snapshot.forecastAt}>{utcTimestamp(preference.snapshot.forecastAt)}</time></p>
+                        <div className="flex items-center gap-3">
+                          <WeatherIcon code="cloudy" className="h-10 w-10 shrink-0 rounded-xl bg-tint p-2 text-primary" />
+                          <div className="min-w-0">
+                            <p className="text-2xl font-semibold tabular-nums">{displayTemperature(preference.snapshot.temperatureC)} °C</p>
+                            <p className="text-sm">{preference.snapshot.description}</p>
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted">Saved at <time dateTime={preference.createdAt}>{utcTimestamp(preference.createdAt)}</time></p>
+                      </div>
+                      <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-divider pt-3">
+                      <button className="secondary" disabled={retrySeconds > 0} aria-label={`Open fresh forecast for ${preference.location.name}, saved ${utcTimestamp(preference.snapshot.forecastAt)}`} onClick={() => {
                         void lookup({ latitude: preference.location.latitude, longitude: preference.location.longitude }, true)
                       }}>
                         Open fresh forecast
@@ -277,14 +295,15 @@ export function WeatherView({ session, sessionLoading, onFailure, loginLink }: {
                       <button className="destructive" disabled={removing.includes(preference.id) || sessionLoading}
                         aria-label={`Remove saved forecast for ${preference.location.name}, ${utcTimestamp(preference.snapshot.forecastAt)}`}
                         onClick={() => { void remove(preference.id) }}>
-                        Remove{removing.includes(preference.id) ? ' — removing' : ''}
+                        {removing.includes(preference.id) ? 'Removing...' : 'Remove'}
                       </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
               </>
             )}
-          </Card>
+          </div>
         </section>
       </div>
     </>
