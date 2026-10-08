@@ -75,14 +75,20 @@ jobs:
         run: |
           [[ "$RELEASE_RUN_ID" =~ ^[0-9]+$ ]] || exit 1
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID" > "$RUNNER_TEMP/frontend-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/frontend-jobs.json"
           node --input-type=module -e "
             import fs from 'node:fs';
             const run = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/frontend-run.json'));
             if (run.head_branch !== 'main' || run.conclusion !== 'success' ||
-                run.path !== '.github/workflows/frontend-deploy.yml' ||
+                !['.github/workflows/frontend-deploy.yml', '.github/workflows/production.yml'].includes(run.path) ||
                 !['push', 'workflow_dispatch'].includes(run.event) ||
                 run.repository.full_name !== process.env.GITHUB_REPOSITORY) {
               throw new Error('Untrusted or unsuccessful frontend rollback artifact');
+            }
+            const jobs = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/frontend-jobs.json')).jobs;
+            const deployJob = run.path === '.github/workflows/production.yml' ? 'deploy' : 'release';
+            if (!jobs.some(job => job.name === deployJob && job.conclusion === 'success')) {
+              throw new Error('Artifact did not complete a production deployment');
             }"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

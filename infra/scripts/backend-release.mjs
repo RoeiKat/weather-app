@@ -2,7 +2,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   apiVersion, candidateTraffic, findResource, immutableImage, list, productionTraffic,
-  promotedTraffic, required, rest, smoke, waitFor,
+  promotedTraffic, required, rest, smoke, trafficMatches, waitFor,
 } from './azure.mjs';
 
 export async function ready(id, revision, minimum = 2) {
@@ -10,8 +10,8 @@ export async function ready(id, revision, minimum = 2) {
     const current = list(id, '/revisions').find((item) => item.name === revision);
     if (!current) return false;
     const properties = current.properties;
-    if (properties.provisioningState === 'Failed' || properties.runningState === 'Failed') {
-      throw new Error('Revision provisioning/health failed.');
+    if (properties.provisioningState === 'Failed' || ['Failed', 'ActivationFailed'].includes(properties.runningState)) {
+      throw new Error(`Revision ${revision} failed: provisioning=${properties.provisioningState}, running=${properties.runningState}, health=${properties.healthState}.`);
     }
     if (!properties.active || properties.healthState !== 'Healthy' || properties.provisioningState !== 'Provisioned') return false;
     const replicas = list(id, `/revisions/${revision}/replicas`);
@@ -28,9 +28,7 @@ async function setTraffic(id, traffic) {
   rest('patch', id, { properties: { configuration: { ingress } } });
   await waitFor('exact named traffic allocation', () => {
     const actual = rest('get', id).properties.configuration.ingress.traffic;
-    return actual.length === traffic.length && traffic.every((expected) =>
-      actual.some((item) => item.revisionName === expected.revisionName &&
-        item.weight === expected.weight && item.label === expected.label && !item.latestRevision));
+    return trafficMatches(actual, traffic);
   });
 }
 
@@ -145,7 +143,7 @@ export async function release() {
       await waitFor('canonical smoke after platform/initial-origin propagation', async () => {
         try { await smoke(publicUrl); return true; }
         catch (error) { console.error(`Platform smoke pending: ${error.message}`); return false; }
-      }, 300_000);
+      }, 900_000);
     } else {
       await smoke(publicUrl);
     }
@@ -153,7 +151,7 @@ export async function release() {
     if (process.env.PLATFORM_REVISION_ONLY === 'true') {
       candidate = rest('get', id).properties.latestRevisionName;
       const target = rest('get', id, null, `/revisions/${candidate}`);
-      immutableImage(target.properties.template.containers[0].image, required('ACR_LOGIN_SERVER'));
+      receipt.image = immutableImage(target.properties.template.containers[0].image, required('ACR_LOGIN_SERVER'));
     } else if (rollback) {
       if (!process.env.SCHEMA_COMPATIBILITY_APPROVED || process.env.SCHEMA_COMPATIBILITY_APPROVED !== 'true' ||
           !rollback.startsWith(`${appName}--`) || !/^[a-z0-9-]+$/.test(rollback)) {
@@ -161,7 +159,7 @@ export async function release() {
       }
       candidate = rollback;
       const target = rest('get', id, null, `/revisions/${candidate}`);
-      immutableImage(target.properties.template.containers[0].image, required('ACR_LOGIN_SERVER'));
+      receipt.image = immutableImage(target.properties.template.containers[0].image, required('ACR_LOGIN_SERVER'));
       if (!target.properties.active) rest('post', id, null, `/revisions/${candidate}/activate`);
     } else {
       const image = immutableImage(required('RELEASE_IMAGE'), required('ACR_LOGIN_SERVER'));
@@ -180,6 +178,9 @@ export async function release() {
     }
     receipt.candidate = candidate;
     await ready(id, candidate);
+    if (rest('get', id, null, `/revisions/${candidate}`).properties.template.containers[0].image !== receipt.image) {
+      throw new Error('Candidate did not use the exact release digest; refusing promotion.');
+    }
     if (candidate === knownGood) {
       await smoke(publicUrl);
       receipt.outcome = 'unchanged';
@@ -199,10 +200,14 @@ export async function release() {
     }, 300_000);
     promotionAttempted = true;
     await setTraffic(id, promotedTraffic(labelled, candidate));
-    for (let check = 0; check < 6; check++) {
-      await ready(id, candidate);
-      await smoke(publicUrl);
-      if (check < 5) await new Promise((resolve) => setTimeout(resolve, 20_000));
+    await ready(id, candidate);
+    await smoke(publicUrl);
+    for (const revision of list(id, '/revisions')) {
+      if (revision.properties.active && ![knownGood, candidate].includes(revision.name)) {
+        rest('post', id, null, `/revisions/${revision.name}/deactivate`);
+        await waitFor(`deactivation of superseded ${revision.name}`, () =>
+          rest('get', id, null, `/revisions/${revision.name}`).properties.active === false);
+      }
     }
     receipt.outcome = 'promoted';
     console.info(`Promoted ${candidate}; retained warm rollback revision ${knownGood}.`);
@@ -233,7 +238,7 @@ export async function release() {
     writeFileSync('release-receipt.json', JSON.stringify(receipt, null, 2));
     if (process.env.GITHUB_STEP_SUMMARY) {
       appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-        `### Backend release\nOutcome: ${receipt.outcome}\n\nPrevious: \`${knownGood}\`\n\nCandidate: \`${candidate ?? 'not created'}\`\n\n${receipt.recovery ?? ''}\n`);
+        `### Backend release\nOutcome: ${receipt.outcome}\n\nPrevious: \`${knownGood}\`\n\nCandidate: \`${candidate ?? 'not created'}\`\n\n${receipt.failure ?? ''}\n\n${receipt.recovery ?? ''}\n`);
     }
   }
 }

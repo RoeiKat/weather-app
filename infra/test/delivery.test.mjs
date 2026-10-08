@@ -6,12 +6,13 @@ import { tmpdir } from 'node:os';
 import timers from 'node:timers/promises';
 import { join, resolve } from 'node:path';
 import { test, mock } from 'node:test';
-import { az, azureCommand, candidateTraffic, findResource, immutableImage, productionTraffic, promotedTraffic, rest, smoke } from '../scripts/azure.mjs';
+import { az, azureCommand, candidateTraffic, findResource, immutableImage, productionTraffic, promotedTraffic, rest, smoke, trafficMatches } from '../scripts/azure.mjs';
 import { extract } from '../scripts/frontdoor-prefixes.mjs';
-import { artifactFiles, sha256, verifyManifest } from '../scripts/frontend-release.mjs';
+import { artifactFiles, frontendSmoke, sha256, verifyManifest } from '../scripts/frontend-release.mjs';
 import { release } from '../scripts/backend-release.mjs';
-import { fingerprint, verifyMetadata } from '../scripts/terraform-plan.mjs';
+import { fingerprint, platformInputs, verifyMetadata } from '../scripts/terraform-plan.mjs';
 import { administer, sqlSteps } from '../scripts/database-admin.mjs';
+import { changedSurfaces } from '../scripts/delivery-changes.mjs';
 
 const image = `weatheracr.azurecr.io/weather-backend@sha256:${'a'.repeat(64)}`;
 const original = [{ revisionName: 'weather-api--old', weight: 100, latestRevision: false }];
@@ -265,7 +266,7 @@ test('smoke checks enforce target, no-store and response shape without retaining
   } finally { mocked.mock.restore(); }
 });
 
-for (const scenario of ['migration-failure', 'promotion-failure', 'success', 'rollback', 'platform-unchanged', 'platform-propagation']) {
+for (const scenario of ['previous-health-failure', 'migration-failure', 'promotion-failure', 'wrong-candidate-image-failure', 'arm-normalization', 'success', 'rollback', 'platform-unchanged', 'platform-propagation']) {
 test(`release orchestration: ${scenario}`, async () => {
   const parent = resolve('infra/validation-output');
   mkdirSync(parent, { recursive: true });
@@ -287,6 +288,14 @@ test(`release orchestration: ${scenario}`, async () => {
       name: 'init', image, command: ['node'], args: ['--version'], env: [], probes: [], resources: { cpu: 0.5, memory: '1Gi' },
     }] : [] };
   let started = false;
+  if (scenario === 'arm-normalization') {
+    revisions.set('weather-api--superseded', { name: 'weather-api--superseded', properties: {
+      active: true, healthState: 'Healthy', provisioningState: 'Provisioned', template: originalTemplate,
+    } });
+  }
+  if (scenario === 'previous-health-failure') {
+    Object.assign(revisions.get('weather-api--old').properties, { runningState: 'ActivationFailed', healthState: 'Unhealthy' });
+  }
   let smokeRequests = 0;
   const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
     const args = azureCliArgs(binary, executableArgs);
@@ -326,6 +335,9 @@ test(`release orchestration: ${scenario}`, async () => {
     } else if (url.pathname.endsWith('/activate')) {
       revisions.get(url.pathname.split('/').at(-2)).properties.active = true;
       result = null;
+    } else if (url.pathname.endsWith('/deactivate')) {
+      revisions.get(url.pathname.split('/').at(-2)).properties.active = false;
+      result = null;
     } else if (url.pathname.includes('/revisions/')) {
       result = revisions.get(url.pathname.split('/').at(-1));
     } else if (url.pathname.endsWith('/weather-api')) {
@@ -335,10 +347,17 @@ test(`release orchestration: ${scenario}`, async () => {
         const name = `weather-api--${template.revisionSuffix}`;
         app.properties.latestRevisionName = name;
         revisions.set(name, { name, properties: {
-          active: true, healthState: 'Healthy', provisioningState: 'Provisioned', template,
+          active: true, healthState: 'Healthy', provisioningState: 'Provisioned',
+          template: scenario === 'wrong-candidate-image-failure'
+            ? { ...template, containers: [{ ...template.containers[0], image: image.replace(/a{64}$/, 'b'.repeat(64)) }] }
+            : template,
         } });
       } else if (method === 'patch') {
         app.properties.configuration.ingress = body.properties.configuration.ingress;
+        if (scenario === 'arm-normalization') {
+          app.properties.configuration.ingress.traffic = app.properties.configuration.ingress.traffic.filter((item) =>
+            item.weight > 0 || item.label);
+        }
       }
       result = app;
     } else { throw new Error(`Unexpected fake Azure path: ${url.pathname}`); }
@@ -375,10 +394,18 @@ test(`release orchestration: ${scenario}`, async () => {
       process.env.SCHEMA_COMPATIBILITY_APPROVED = 'true';
     }
     if (scenario.startsWith('platform-')) process.env.PLATFORM_REVISION_ONLY = 'true';
-    if (scenario === 'migration-failure') {
+    if (scenario === 'previous-health-failure') {
+      await assert.rejects(release(), /running=ActivationFailed, health=Unhealthy/);
+      assert.equal(started, false);
+      assert.equal(calls.filter((call) => call.body?.properties?.template).length, 0);
+      assert.deepEqual(app.properties.configuration.ingress, originalIngress);
+    } else if (scenario === 'migration-failure') {
       await assert.rejects(release(), /Migration Failed/);
       assert.equal(calls.filter((call) => call.body?.properties?.template).length, 0);
       assert.deepEqual(app.properties.template, originalTemplate);
+      assert.deepEqual(app.properties.configuration.ingress, originalIngress);
+    } else if (scenario === 'wrong-candidate-image-failure') {
+      await assert.rejects(release(), /exact release digest/);
       assert.deepEqual(app.properties.configuration.ingress, originalIngress);
     } else if (scenario === 'promotion-failure') {
       await assert.rejects(release(), /Smoke/);
@@ -388,6 +415,11 @@ test(`release orchestration: ${scenario}`, async () => {
       const expected = scenario === 'rollback' ? 'weather-api--retained' :
         scenario.startsWith('platform-') ? 'weather-api--old' : 'weather-api--r42-1';
       assert.equal(app.properties.configuration.ingress.traffic.find((item) => item.weight === 100).revisionName, expected);
+      if (scenario === 'arm-normalization') {
+        assert.equal(revisions.get('weather-api--superseded').properties.active, false);
+        assert.equal(revisions.get('weather-api--old').properties.active, true);
+        assert.equal(revisions.get(expected).properties.active, true);
+      }
       if (scenario === 'rollback' || scenario.startsWith('platform-')) assert.equal(started, false);
     }
     assert.deepEqual(app.properties.configuration.ingress.ipSecurityRestrictions, originalIngress.ipSecurityRestrictions);
@@ -409,6 +441,70 @@ test(`release orchestration: ${scenario}`, async () => {
   }
 });
 }
+
+test('change detection handles independent surfaces and delivery changes without losing accumulated paths', () => {
+  assert.deepEqual(changedSurfaces(['backend/src/app.ts', 'frontend/src/App.tsx']), { backend: true, frontend: true, infra: false });
+  assert.deepEqual(changedSurfaces(['infra/database.tf']), { backend: false, frontend: false, infra: true });
+  assert.deepEqual(changedSurfaces(['frontend/src/App.tsx']), { backend: false, frontend: true, infra: false });
+  assert.deepEqual(changedSurfaces(['.github/workflows/production.yml']), { backend: true, frontend: true, infra: true });
+  assert.deepEqual(changedSurfaces(['infra/scripts/backend-release.mjs']), { backend: true, frontend: true, infra: true });
+  assert.deepEqual(changedSurfaces(['docs/ai/20-final-deployment-and-cd-automation.md']), { backend: false, frontend: false, infra: false });
+});
+
+test('traffic confirmation accepts ARM zero-weight pruning, but never another serving revision or label', () => {
+  const expected = promotedTraffic(candidateTraffic(original, 'weather-api--new'), 'weather-api--new');
+  const actual = expected.filter((item) => item.weight > 0 || item.label);
+  assert.equal(trafficMatches(actual, expected), true);
+  assert.equal(trafficMatches([{ ...actual[0], weight: 90 }], expected), false);
+  assert.equal(trafficMatches([{ ...actual[0], label: 'unexpected' }], expected), false);
+  assert.equal(trafficMatches([{ ...actual[0], latestRevision: true }], expected), false);
+  assert.equal(trafficMatches(original, expected), false);
+});
+
+test('platform inputs derive the existing image and complete current global IPv4 tags without manual digest copying', () => {
+  const inputs = { name: 'weather', bootstrap_image: null, frontdoor_backend_ipv4: ['192.0.2.0/24'] };
+  const tags = { values: [{ name: 'AzureFrontDoor.Backend', properties: {
+    addressPrefixes: ['2001:db8::/32', '198.51.100.0/24', '198.51.100.0/24'], changeNumber: 27,
+  } }] };
+  const effective = platformInputs(inputs, appFixture(), tags);
+  assert.equal(effective.bootstrap_image, image);
+  assert.deepEqual(effective.frontdoor_backend_ipv4, ['198.51.100.0/24']);
+  assert.equal(effective.frontdoor_service_tag_change_number, '27');
+  assert.equal(inputs.bootstrap_image, null);
+  assert.equal(platformInputs(inputs, null, tags).bootstrap_image, null);
+  assert.throws(() => platformInputs(inputs, appFixture(), { values: [] }), /exactly one global/);
+});
+
+test('frontend smoke permits only real anonymous static 404s, never immutable errors or cacheable private failures', async () => {
+  const html = '<html>synthetic shell</html>';
+  const script = 'synthetic built JavaScript';
+  const files = [{ key: 'index.html', hash: sha256(html) }, { key: 'assets/index-synthetic.js', asset: true, hash: sha256(script) }];
+  let bad = '';
+  const fetchMock = mock.method(globalThis, 'fetch', async (url) => {
+    const path = new URL(url).pathname;
+    if (path === '/api/v1/health') return new Response('{"status":"ok"}', { headers: { 'Cache-Control': 'no-store' } });
+    if (path === '/api/v1/auth/session') return new Response('{"user":null,"csrfToken":"synthetic"}', { headers: { 'Cache-Control': 'no-store' } });
+    if (path === '/assets/index-synthetic.js') return new Response(script, { headers: {
+      'Cache-Control': 'public, max-age=31536000, immutable', 'Content-Type': 'text/javascript',
+    } });
+    if (['/assets/not-a-real-release-file.js', '/not-a-client-route', '/api/v1/not-a-route'].includes(path)) {
+      return new Response('synthetic error document', {
+        status: bad === 'success-shaped' && path.startsWith('/assets/') ? 200 : 404,
+        headers: path.startsWith('/assets/')
+          ? bad === 'immutable' ? { 'Cache-Control': 'public, immutable' } : {}
+          : bad === 'private-cache' ? {} : { 'Cache-Control': 'no-store' },
+      });
+    }
+    return new Response(html, { headers: { 'Cache-Control': 'no-store', 'Content-Type': 'text/html',
+      'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "script-src 'self'" } });
+  });
+  try {
+    await frontendSmoke('https://weather.example', files);
+    for (bad of ['success-shaped', 'immutable', 'private-cache']) {
+      await assert.rejects(frontendSmoke('https://weather.example', files), /404\/cache-isolation/);
+    }
+  } finally { fetchMock.mock.restore(); }
+});
 
 test('first-plan fingerprint supports absent group/resources and detects their creation; Azure errors fail closed', () => {
   const options = { group: 'weather-prod', subscription: 'synthetic', appName: 'weather-api', jobName: 'weather-migrate' };

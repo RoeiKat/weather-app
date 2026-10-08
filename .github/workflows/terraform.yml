@@ -10,13 +10,6 @@ on:
         type: choice
         options: [plan, apply]
         default: plan
-      plan_run_id:
-        description: Reviewed plan workflow run ID (apply only)
-        type: string
-      plan_run_attempt:
-        description: Reviewed plan attempt (apply only)
-        type: string
-        default: '1'
 
 permissions:
   contents: read
@@ -66,9 +59,9 @@ jobs:
       MIGRATION_JOB_NAME: ${{ vars.MIGRATION_JOB_NAME }}
       STATE_ACCOUNT: ${{ vars.TF_STATE_ACCOUNT }}
       STATE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
-      TERRAFORM_INPUTS_JSON: ${{ vars.TERRAFORM_INPUTS_JSON }}
-      PLAN_RUN_ID: ${{ inputs.plan_run_id }}
-      PLAN_RUN_ATTEMPT: ${{ inputs.plan_run_attempt }}
+      TERRAFORM_INPUTS_JSON: ${{ secrets.TERRAFORM_INPUTS_JSON }}
+      PLAN_RUN_ID: ${{ github.run_id }}
+      PLAN_RUN_ATTEMPT: ${{ github.run_attempt }}
       TF_IN_AUTOMATION: 'true'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -93,7 +86,6 @@ jobs:
             -backend-config="key=production.tfstate"
           terraform -chdir=infra validate
       - name: Create protected plan
-        if: inputs.operation != 'apply'
         run: |
           node infra/scripts/terraform-plan.mjs inputs
           if ! terraform -chdir=infra plan -input=false -lock-timeout=5m -out="$GITHUB_WORKSPACE/production.tfplan" > "$RUNNER_TEMP/terraform-plan.log" 2>&1; then
@@ -108,15 +100,9 @@ jobs:
             --name "$prefix/production.tfplan" --file production.tfplan --overwrite false --only-show-errors --output none
           az storage blob upload --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfplans \
             --name "$prefix/metadata.json" --file plan-metadata.json --overwrite false --only-show-errors --output none
-      - name: Apply only the reviewed saved plan
+      - name: Apply the exact plan from this validated main run
         if: inputs.operation == 'apply'
         run: |
-          [[ "$PLAN_RUN_ID" =~ ^[0-9]+$ && "$PLAN_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || exit 1
-          prefix="$PLAN_RUN_ID/$PLAN_RUN_ATTEMPT"
-          az storage blob download --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfplans \
-            --name "$prefix/production.tfplan" --file production.tfplan --only-show-errors --output none
-          az storage blob download --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfplans \
-            --name "$prefix/metadata.json" --file plan-metadata.json --only-show-errors --output none
           node infra/scripts/terraform-plan.mjs verify
           if ! terraform -chdir=infra apply -input=false -lock-timeout=5m "$GITHUB_WORKSPACE/production.tfplan" > "$RUNNER_TEMP/terraform-apply.log" 2>&1; then
             az storage blob upload --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfdiagnostics \

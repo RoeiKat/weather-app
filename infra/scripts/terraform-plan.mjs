@@ -38,17 +38,29 @@ export function verifyMetadata(metadata, inputs, liveFingerprint, planBytes, now
   }
 }
 
+export function platformInputs(inputs, app, serviceTags) {
+  const current = extract(serviceTags);
+  return {
+    ...inputs,
+    ...current,
+    // Existing platform creation must never depend on copying a release digest
+    // back into GitHub settings. Terraform ignores image/suffix/traffic drift.
+    bootstrap_image: app
+      ? app.properties.template.containers[0].image
+      : inputs.bootstrap_image ?? null,
+  };
+}
+
 function main() {
   const inputs = JSON.parse(required('TERRAFORM_INPUTS_JSON'));
   const configHash = hash(JSON.stringify(inputs));
   const mode = process.argv[2];
+  const effectiveInputs = () => {
+    const id = `/subscriptions/${required('AZURE_SUBSCRIPTION_ID')}/resourceGroups/${required('AZURE_RESOURCE_GROUP')}/providers/Microsoft.App/containerApps/${required('ACA_APP_NAME')}`;
+    return platformInputs(inputs, findResource(id), az(['network', 'list-service-tags', '--location', 'swedencentral']));
+  };
   if (mode === 'inputs') {
-    const current = extract(az(['network', 'list-service-tags', '--location', 'swedencentral']));
-    if (JSON.stringify([...inputs.frontdoor_backend_ipv4].sort()) !== JSON.stringify(current.frontdoor_backend_ipv4) ||
-        String(inputs.frontdoor_service_tag_change_number) !== current.frontdoor_service_tag_change_number) {
-      throw new Error('Front Door service-tag data changed. Review the complete current IPv4 set and update inputs; last good Azure ACL is unchanged.');
-    }
-    writeFileSync('infra/runtime.auto.tfvars.json', JSON.stringify(inputs));
+    writeFileSync('infra/runtime.auto.tfvars.json', JSON.stringify(effectiveInputs()), { mode: 0o600 });
     writeFileSync('plan-fingerprint.json', JSON.stringify({ fingerprint: fingerprint(), configHash }));
   } else if (mode === 'seal') {
     const before = JSON.parse(readFileSync('plan-fingerprint.json', 'utf8'));
@@ -68,10 +80,9 @@ function main() {
       counts[action] = (counts[action] ?? 0) + 1;
     }
     appendFileSync(required('GITHUB_STEP_SUMMARY'),
-      `### Protected Terraform plan\nCommit: \`${metadata.sha}\`\n\nPlan SHA256: \`${metadata.planHash}\`\n\nCreated: ${metadata.created}\n\nAction counts: ${JSON.stringify(counts)}\n\nReview the exact private tfplans blob with authorized Azure access before approving apply. No plan/state is uploaded to GitHub.\n`);
+      `### Protected Terraform plan\nCommit: \`${metadata.sha}\`\n\nPlan SHA256: \`${metadata.planHash}\`\n\nCreated: ${metadata.created}\n\nAction counts: ${JSON.stringify(counts)}\n\nExact plan retained in private tfplans. Main is the automatic apply boundary; manual plan-only runs remain diagnostic. No plan/state is uploaded to GitHub.\n`);
   } else if (mode === 'verify') {
     verifyMetadata(JSON.parse(readFileSync('plan-metadata.json', 'utf8')), inputs, fingerprint(), readFileSync('production.tfplan'));
-    writeFileSync('infra/runtime.auto.tfvars.json', JSON.stringify(inputs));
     console.info('Verified exact private plan. Terraform additionally enforces state lineage/serial.');
   } else { throw new Error('Use inputs, seal or verify.'); }
 }

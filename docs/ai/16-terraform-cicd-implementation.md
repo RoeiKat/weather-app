@@ -1,5 +1,10 @@
 # Terraform and CI/CD implementation
 
+**Historical implementation record:** For the now-live deployment and automatic
+main delivery, use [the current runbook](../deployment.md) and
+[final deployment evidence](20-final-deployment-and-cd-automation.md).
+The manual sequencing below describes the earlier bootstrap phase.
+
 - **Date:** 2026-10-07; updated for the user's disposable-assignment instructions.
 - **Author/tool:** AI assistant using Copilot SDK in VS Code; model Unknown.
 - **Decision owner:** Requesting user.

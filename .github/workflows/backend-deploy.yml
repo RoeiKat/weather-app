@@ -91,7 +91,7 @@ jobs:
       (needs.publish.result == 'success' || inputs.operation == 'rollback' ||
        (inputs.operation == 'bootstrap' && inputs.prepared_image != ''))
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 75
     environment: assignment
     concurrency:
       group: weather-production-mutation

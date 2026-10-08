@@ -43,7 +43,7 @@ export function verifyManifest(files, manifest) {
       files.some((file) => manifest[file.key] !== file.hash)) throw new Error('Static artifact checksum mismatch.');
 }
 
-async function frontendSmoke(url, files) {
+export async function frontendSmoke(url, files) {
   await smoke(url);
   for (const path of ['/', '/login', '/login/', '/register', '/register/']) {
     const response = await fetch(`${url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(15_000) });
@@ -66,7 +66,13 @@ async function frontendSmoke(url, files) {
   for (const path of ['/assets/not-a-real-release-file.js', '/not-a-client-route', '/api/v1/not-a-route']) {
     const missing = await fetch(`${url}${path}`, { signal: AbortSignal.timeout(15_000) });
     await missing.body?.cancel();
-    if (missing.status !== 404 || !missing.headers.get('cache-control')?.includes('no-store')) {
+    const cache = missing.headers.get('cache-control');
+    // Storage website error responses omit blob Cache-Control metadata. This
+    // anonymous static 404 is not a private API response or an immutable asset.
+    const safeCache = path.startsWith('/assets/')
+      ? cache === null || cache.includes('no-store')
+      : cache?.includes('no-store');
+    if (missing.status !== 404 || !safeCache) {
       throw new Error(`404/cache-isolation smoke failed: ${path}`);
     }
   }

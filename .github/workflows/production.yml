@@ -1,0 +1,253 @@
+name: Production delivery
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [redeploy, diagnostics]
+        default: redeploy
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      backend: ${{ steps.changes.outputs.backend }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      infra: ${{ steps.changes.outputs.infra }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+      - id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            printf 'backend=true\nfrontend=true\ninfra=true\n' >> "$GITHUB_OUTPUT"
+          else
+            # Compare to delivery success, not just the last push. Queued runs
+            # may be superseded, and failed deployments must not lose changes.
+            before=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/production.yml/runs?status=success&branch=main&event=push&per_page=1" --jq '.workflow_runs[0].head_sha // "0000000000000000000000000000000000000000"')
+            node infra/scripts/delivery-changes.mjs "$before" "$GITHUB_SHA"
+          fi
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - working-directory: backend
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+      - run: |
+          docker build --tag weather-backend:release --file backend/Dockerfile backend
+          docker save weather-backend:release --output backend-image.tar
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: backend-image
+          path: backend-image.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        env:
+          VITE_API_BASE_URL: /api/v1
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+      - run: node infra/scripts/frontend-release.mjs manifest frontend/dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: frontend-static
+          path: frontend/dist
+          retention-days: 30
+          if-no-files-found: error
+
+  infrastructure:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: '1.16.5'
+          terraform_wrapper: false
+      - run: |
+          terraform -chdir=infra fmt -check -recursive
+          terraform -chdir=infra init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra validate
+          terraform -chdir=infra test
+          node --test infra/test/*.test.mjs
+          terraform -chdir=infra/state init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/state validate
+
+  deploy:
+    needs: [changes, backend, frontend, infrastructure]
+    if: >-
+      always() && github.ref == 'refs/heads/main' && inputs.operation != 'diagnostics' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
+      (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' ||
+       needs.changes.outputs.infra == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: assignment
+    concurrency:
+      group: weather-production-mutation
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_USE_AZUREAD: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACA_APP_NAME: ${{ vars.ACA_APP_NAME }}
+      MIGRATION_JOB_NAME: ${{ vars.MIGRATION_JOB_NAME }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      FRONTEND_STORAGE_ACCOUNT: ${{ vars.FRONTEND_STORAGE_ACCOUNT }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+      STATE_ACCOUNT: ${{ vars.TF_STATE_ACCOUNT }}
+      STATE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TERRAFORM_INPUTS_JSON: ${{ secrets.TERRAFORM_INPUTS_JSON }}
+      PLAN_RUN_ID: ${{ github.run_id }}
+      PLAN_RUN_ATTEMPT: ${{ github.run_attempt }}
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Refuse an obsolete queued commit before any production mutation
+        run: |
+          git fetch origin main
+          [[ "$(git rev-parse origin/main)" == "$GITHUB_SHA" ]] || { echo "::error::Main advanced; the newer delivery run must deploy the accumulated changes."; exit 1; }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        if: needs.changes.outputs.infra == 'true'
+        with:
+          terraform_version: '1.16.5'
+          terraform_wrapper: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.changes.outputs.backend == 'true'
+        with:
+          name: backend-image
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          name: frontend-static
+          path: static-release
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Plan, retain protected evidence and apply the exact plan
+        if: needs.changes.outputs.infra == 'true'
+        run: |
+          terraform -chdir=infra init -input=false -lockfile=readonly \
+            -backend-config="storage_account_name=$STATE_ACCOUNT" \
+            -backend-config="resource_group_name=$STATE_GROUP" \
+            -backend-config="container_name=tfstate" -backend-config="key=production.tfstate"
+          node infra/scripts/terraform-plan.mjs inputs
+          terraform -chdir=infra validate
+          if ! terraform -chdir=infra plan -input=false -lock-timeout=5m -out="$GITHUB_WORKSPACE/production.tfplan" > "$RUNNER_TEMP/terraform-plan.log" 2>&1; then
+            az storage blob upload --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfdiagnostics \
+              --name "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/plan.log" --file "$RUNNER_TEMP/terraform-plan.log" --overwrite false --only-show-errors --output none
+            echo "::error::Plan failed; inspect protected tfdiagnostics."
+            exit 1
+          fi
+          node infra/scripts/terraform-plan.mjs seal
+          for file in production.tfplan plan-metadata.json; do
+            az storage blob upload --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfplans \
+              --name "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/$file" --file "$file" --overwrite false --only-show-errors --output none
+          done
+          node infra/scripts/terraform-plan.mjs verify
+          if ! terraform -chdir=infra apply -input=false -lock-timeout=5m "$GITHUB_WORKSPACE/production.tfplan" > "$RUNNER_TEMP/terraform-apply.log" 2>&1; then
+            az storage blob upload --auth-mode login --account-name "$STATE_ACCOUNT" --container-name tfdiagnostics \
+              --name "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/apply.log" --file "$RUNNER_TEMP/terraform-apply.log" --overwrite false --only-show-errors --output none
+            echo "::error::Apply failed or partially completed; re-plan, never reuse a stale plan."
+            exit 1
+          fi
+      - name: Validate platform-created revision when no application release follows
+        if: needs.changes.outputs.infra == 'true' && needs.changes.outputs.backend != 'true'
+        env:
+          PLATFORM_REVISION_ONLY: 'true'
+        run: node infra/scripts/backend-release.mjs
+      - name: Publish tested backend and release the resolved immutable digest
+        if: needs.changes.outputs.backend == 'true'
+        run: |
+          docker load --input backend-image.tar
+          tag="$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          az acr login --name "$ACR_NAME" --only-show-errors
+          docker tag weather-backend:release "$ACR_LOGIN_SERVER/weather-backend:$tag"
+          docker push "$ACR_LOGIN_SERVER/weather-backend:$tag"
+          digest=$(az acr repository show --name "$ACR_NAME" --image "weather-backend:$tag" --query digest --output tsv --only-show-errors)
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
+          az acr repository update --name "$ACR_NAME" --image "weather-backend:$tag" --write-enabled false --only-show-errors --output none
+          export RELEASE_IMAGE="$ACR_LOGIN_SERVER/weather-backend@$digest"
+          node infra/scripts/backend-release.mjs
+      - name: Publish frontend assets first, index last, then smoke public routes
+        if: needs.changes.outputs.frontend == 'true'
+        run: node infra/scripts/frontend-release.mjs publish static-release
+      - name: Retain sanitized backend evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: backend-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-receipt.json
+          retention-days: 30
+          if-no-files-found: ignore
+      - name: Remove protected runner files
+        if: always()
+        run: |
+          rm -f production.tfplan plan-metadata.json plan-fingerprint.json infra/runtime.auto.tfvars.json backend-image.tar
+          rm -f "$RUNNER_TEMP/terraform-plan.log" "$RUNNER_TEMP/terraform-apply.log"

@@ -61,9 +61,15 @@ resource "azurerm_postgresql_flexible_server_database" "weather" {
 
 resource "azurerm_postgresql_flexible_server_configuration" "database" {
   for_each = {
-    "require_secure_transport" = "on"
-    "ssl_min_protocol_version" = "TLSv1.2"
-    "pgbouncer.enabled"        = "true"
+    "require_secure_transport"            = "on"
+    "ssl_min_protocol_version"            = "TLSv1.2"
+    "pgbouncer.enabled"                   = "true"
+    "pgbouncer.ignore_startup_parameters" = "statement_timeout,lock_timeout,idle_in_transaction_session_timeout"
+    # PgBouncer rejects these startup fields. Enforce identical server defaults,
+    # rather than merely ignoring the client's protections.
+    "statement_timeout"                   = "5000"
+    "lock_timeout"                        = "3000"
+    "idle_in_transaction_session_timeout" = "10000"
   }
   name      = each.key
   server_id = azurerm_postgresql_flexible_server.database.id

@@ -249,6 +249,20 @@ export function promotedTraffic(traffic, revision) {
   }));
 }
 
+export function trafficMatches(actual, expected) {
+  // ARM omits unlabelled zero-weight entries. Those revisions remain active;
+  // readiness is verified separately before they are used for rollback.
+  const meaningful = (traffic) => traffic.filter((item) => item.weight > 0 || item.label);
+  if (!Array.isArray(actual) || actual.some((item) => item.latestRevision || !item.revisionName)) return false;
+  const current = meaningful(actual);
+  const desired = meaningful(expected);
+  return current.length === desired.length &&
+    actual.reduce((sum, item) => sum + item.weight, 0) === 100 &&
+    desired.every((item) => current.some((value) =>
+      value.revisionName === item.revisionName && value.weight === item.weight &&
+      (value.label ?? null) === (item.label ?? null)));
+}
+
 export async function smoke(baseUrl, candidate = false) {
   const base = new URL(baseUrl);
   if (base.protocol !== "https:" || base.origin !== baseUrl)
@@ -267,7 +281,10 @@ export async function smoke(baseUrl, candidate = false) {
         response.headers.get("x-weather-release-target") !== "candidate")
     ) {
       await response.body?.cancel();
-      throw new Error(`Smoke status/cache/target check failed for ${path}`);
+      throw new Error(`Smoke status/cache/target check failed for ${path}: ` +
+        `status=${response.status}, cache=${response.headers.get("cache-control") ?? "missing"}, ` +
+        `target=${response.headers.get("x-weather-release-target") ?? "missing"}, ` +
+        `edgeCache=${response.headers.get("x-cache") ?? "missing"}, expectedTarget=${candidate ? "candidate" : "production"}`);
     }
     const body = await response.json();
     if (

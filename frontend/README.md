@@ -70,10 +70,17 @@ architecture review. No Node runtime or container is needed in production.
 - Publish hashed assets first and `index.html` last; retain previous release
   assets for old tabs and rollback. Serialize release publishers.
 - Set hashed asset responses to `public, max-age=31536000, immutable` only on
-  successful hashed asset responses. HTML/navigation/404 responses use
-  `no-store`. Do not publicly cache backend responses.
+  successful hashed asset responses. HTML/navigation and API errors use
+  `no-store`. Storage website missing-asset 404 responses omit blob cache
+  metadata and may be negatively cached at the static edge; they must remain
+  real 404s, never immutable successful assets. Do not publicly cache backend
+  responses.
 - Front Door owns HTTPS, MIME enforcement and response security headers.
   Strip Cookie/Authorization/CSRF only on requests forwarded to Storage.
+
+Normal main pushes now build and deploy changed frontend files automatically;
+see [the deployment runbook](../docs/deployment.md). HTML is no-store and assets
+are content-hashed, so normal releases do not need a Front Door cache purge.
 
 A tested production-compatible CSP baseline:
 

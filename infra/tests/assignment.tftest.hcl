@@ -178,14 +178,24 @@ run "first_apply_compatibility" {
   assert {
     condition = toset(keys(azurerm_postgresql_flexible_server_configuration.database)) == toset([
       "require_secure_transport", "ssl_min_protocol_version", "pgbouncer.enabled"
+      , "pgbouncer.ignore_startup_parameters", "statement_timeout", "lock_timeout",
+      "idle_in_transaction_session_timeout"
       ]) && alltrue([
       for name, expected in {
-        "require_secure_transport" = "on"
-        "ssl_min_protocol_version" = "TLSv1.2"
-        "pgbouncer.enabled"        = "true"
+        "require_secure_transport"            = "on"
+        "ssl_min_protocol_version"            = "TLSv1.2"
+        "pgbouncer.enabled"                   = "true"
+        "pgbouncer.ignore_startup_parameters" = "statement_timeout,lock_timeout,idle_in_transaction_session_timeout"
+        "statement_timeout"                   = "5000"
+        "lock_timeout"                        = "3000"
+        "idle_in_transaction_session_timeout" = "10000"
       } : azurerm_postgresql_flexible_server_configuration.database[name].value == expected
     ])
-    error_message = "Manage only PgBouncer enablement and the existing TLS settings; leave PgBouncer tuning to Azure defaults."
+    error_message = "PgBouncer must accept the client's startup fields without dropping the equivalent server-side timeout protections."
+  }
+  assert {
+    condition     = azurerm_cdn_frontdoor_origin.origin["candidate"].host_name == "weatherx-api---candidate.sample.swedencentral.azurecontainerapps.io"
+    error_message = "ACA label hostnames are app---label, not label---app."
   }
   assert {
     condition     = azurerm_monitor_scheduled_query_rules_alert_v2.revisions.skip_query_validation

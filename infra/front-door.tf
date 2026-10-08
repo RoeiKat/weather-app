@@ -46,7 +46,7 @@ locals {
   api_origin_host = var.bootstrap_image == null ? "${var.name}-api.${azurerm_container_app_environment.app.default_domain}" : azurerm_container_app.api[0].ingress[0].fqdn
   origin_hosts = {
     api       = local.api_origin_host
-    candidate = "candidate---${local.api_origin_host}"
+    candidate = "${var.name}-api---candidate.${azurerm_container_app_environment.app.default_domain}"
     frontend  = azurerm_storage_account.frontend.primary_web_host
   }
 }

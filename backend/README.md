@@ -148,6 +148,14 @@ and never persisted/logged. TLS validates the certificate chain and hostname.
 API connections use PgBouncer port **6432**; migration Jobs use direct port
 **5432** and their separate migration identity/SQL principal.
 
+Managed PgBouncer rejects the client's three startup timeout fields. Terraform
+configures `pgbouncer.ignore_startup_parameters` for those fields and enforces
+identical server defaults (`statement_timeout=5000`, `lock_timeout=3000`,
+`idle_in_transaction_session_timeout=10000`). Do not merely ignore them and lose
+server-side protection. The effective 5s/3s/10s values were verified on the live
+runtime connection. See [the deployment runbook](../docs/deployment.md) for the
+automatic immutable-image/migration/candidate release path.
+
 Pools default to five connections, maximum 20; connection deadline five seconds,
 SQL deadline five seconds, lock deadline three seconds and physical connection
 recycling ten minutes. Account hashing and provider I/O never hold SQL
