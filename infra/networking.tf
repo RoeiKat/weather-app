@@ -66,6 +66,13 @@ resource "azurerm_private_dns_zone_virtual_network_link" "database" {
   name                = "weather"
   private_dns_zone_id = azurerm_private_dns_zone.database.id
   virtual_network_id  = azurerm_virtual_network.app.id
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_network_security_group" "database" {
