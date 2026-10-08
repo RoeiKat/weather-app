@@ -290,3 +290,65 @@ working Windows fix was retained. No dependencies were installed. Terraform
 validation was not rerun for this JavaScript-only fix. Infrastructure settings
 were unchanged, and no live Azure command/mutation was executed. Release/admin
 messages in test output describe mocked fixtures, not real deployments.
+
+## Windows `az rest @file` test compatibility (2026-10-08)
+
+- **Author/tool:** AI assistant using Copilot SDK in VS Code; model Unknown.
+- **Human decision owner:** Requesting user.
+- **Approval reference:** The requesting user's explicit follow-up instruction
+  in this conversation on 2026-10-08 to fix only the delivery mocks and this
+  record, preserve the correct production Windows `@file` fix, and pass all
+  26 tests before finishing or committing.
+- **Final human decision:** Approved for this tests-only compatibility fix.
+  No Azure mutation authorized; infrastructure approval remains
+  **Approved for re-plan, not yet applied**.
+
+**Prompt (faithful summary):** Normalize direct Linux/macOS `az` invocations and
+Windows `cmd.exe`/`ComSpec` invocations prefixed by `/d /s /c az`. Read `--body`
+from JSON file contents when its value starts with `@`, otherwise parse inline
+JSON; return `null` when the option is absent. Use shared helpers throughout
+the mocked Azure calls without weakening any scenario/assertion. Preserve
+production code, run the delivery suite with exactly 26 passing tests, document
+the fix, and do not mutate Azure or commit before tests pass.
+
+**Problem/cause:** The correct production Windows
+[Azure helper](../../infra/scripts/azure.mjs) now writes REST JSON to a temporary
+file and passes `--body @<file>` to avoid `cmd.exe` inline-JSON quoting problems.
+The mocked callbacks in
+[delivery tests](../../infra/test/delivery.test.mjs) still parsed the option
+value itself as JSON, so they failed on `@<file>` instead of reading its
+contents. Production behavior was accepted by the user and was not reverted
+or changed in this task.
+
+**Accepted fix and verification:**
+
+- Keep one shared `azureCliArgs` normalizer, preserving executable, wrapper
+  prefix, and output-flag assertions. Explicit platform inputs allow its
+  Linux, macOS, and Windows shapes to be tested on the Windows host.
+- Add `azureBody` to parse inline JSON, synchronously read and parse `@file`
+  JSON while the production temporary file exists, or return `null` when
+  `--body` is absent. Release, bootstrap, and SQL-administrator mocks use it
+  rather than duplicate inline parsing; fingerprint mocks verify absent bodies.
+- Within the existing fingerprint test, verify normalization for all three
+  platforms and inline/file/absent bodies. Use synthetic JSON with spaces and
+  quotes and a filename containing spaces. Malformed JSON and missing files
+  must throw, not silently produce an empty/default body. Test fixtures are
+  removed in `finally`.
+- Preserve every existing scenario and assertion; add assertions without
+  adding, removing, or skipping any of the 26 test cases.
+- `node --test .\infra\test\delivery.test.mjs` passed:
+  **26 tests, 26 passed, 0 failed, 0 skipped, 0 cancelled**.
+- A before/after SHA-256 comparison confirmed the production Azure helper was
+  byte-for-byte unchanged, including its pre-existing uncommitted Windows fix.
+  Whitespace, local documentation links/status, and changed-file scope checks
+  passed.
+
+**Rejected/out of scope:** Reverting production `@file` transport, changing
+production helper code, duplicating platform/body parsing per scenario,
+weakening assertions, live Azure commands, infrastructure changes, or a commit.
+Only the delivery test file and this record were edited by this follow-up.
+
+The suite ran on Windows with mocked subprocesses and controlled fixtures.
+Linux/macOS normalization and inline bodies were tested explicitly, not by
+running the suite on those operating systems. No live Azure command, mutation,
+apply, dependency installation, or commit was performed.

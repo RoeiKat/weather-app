@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -47,8 +50,29 @@ export function resourceUrl(id, suffix = "") {
 
 export function rest(method, id, body, suffix = "") {
   const args = ["rest", "--method", method, "--url", resourceUrl(id, suffix)];
-  if (body) args.push("--body", JSON.stringify(body));
-  return az(args);
+
+  if (!body) {
+    return az(args);
+  }
+
+  // Windows cmd.exe can corrupt inline JSON quoting.
+  if (process.platform === "win32") {
+    const directory = mkdtempSync(join(tmpdir(), "weather-az-rest-"));
+    const bodyFile = join(directory, "body.json");
+
+    try {
+      writeFileSync(bodyFile, JSON.stringify(body), {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+
+      return az([...args, "--body", `@${bodyFile}`]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  return az([...args, "--body", JSON.stringify(body)]);
 }
 
 export function list(id, suffix) {

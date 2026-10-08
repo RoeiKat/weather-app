@@ -23,13 +23,20 @@ const appFixture = () => ({
   },
 });
 
-function azureCliArgs(binary, args) {
-  const command = azureCommand([]);
+function azureCliArgs(binary, args, platform = process.platform, commandShell = process.env.ComSpec) {
+  const command = azureCommand([], platform, commandShell);
   assert.equal(binary, command.executable);
   assert.deepEqual(args.slice(0, command.args.length), command.args);
   const cliArgs = args.slice(command.args.length);
   assert.deepEqual(cliArgs.slice(-3), ['--only-show-errors', '--output', 'json']);
   return cliArgs;
+}
+
+function azureBody(args) {
+  const index = args.indexOf('--body');
+  if (index === -1) return null;
+  const value = args[index + 1];
+  return JSON.parse(value.startsWith('@') ? readFileSync(value.slice(1), 'utf8') : value);
 }
 
 test('main-root tagged resources ignore only policy tag keys and existing lifecycle-owned fields', () => {
@@ -154,7 +161,7 @@ test(`release orchestration: ${scenario}`, async () => {
     if (args[0] === 'group' && args[1] === 'exists') return 'true';
     const url = new URL(args[args.indexOf('--url') + 1]);
     const method = args[args.indexOf('--method') + 1];
-    const body = args.includes('--body') ? JSON.parse(args[args.indexOf('--body') + 1]) : null;
+    const body = azureBody(args);
     calls.push({ method, path: url.pathname, body });
     let result;
     if (url.pathname.endsWith('/containerApps')) {
@@ -264,6 +271,7 @@ test('first-plan fingerprint supports absent group/resources and detects their c
   const cliArgs = ['rest', '--method', 'patch', '--body', JSON.stringify({ message: 'synthetic "value" with spaces' })];
   const originalArgs = [...cliArgs];
   assert.deepEqual(azureCommand(cliArgs, 'linux'), { executable: 'az', args: cliArgs });
+  assert.deepEqual(azureCommand(cliArgs, 'darwin'), { executable: 'az', args: cliArgs });
   assert.deepEqual(azureCommand(cliArgs, 'win32', null), {
     executable: 'cmd.exe', args: ['/d', '/s', '/c', 'az', ...cliArgs],
   });
@@ -271,12 +279,33 @@ test('first-plan fingerprint supports absent group/resources and detects their c
     executable: 'C:\\Synthetic Shell\\cmd.exe', args: ['/d', '/s', '/c', 'az', ...cliArgs],
   });
   assert.deepEqual(cliArgs, originalArgs);
+  const outputArgs = [...cliArgs, '--only-show-errors', '--output', 'json'];
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    const command = azureCommand(outputArgs, platform, null);
+    assert.deepEqual(azureCliArgs(command.executable, command.args, platform, null), outputArgs);
+  }
+  const body = { message: 'synthetic "value" with spaces' };
+  assert.deepEqual(azureBody(cliArgs), body);
+  assert.equal(azureBody(['group', 'exists']), null);
+  assert.throws(() => azureBody(['--body', '{']), SyntaxError);
+  const parent = resolve('infra', 'validation-output');
+  mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, 'cli-body-test-'));
+  try {
+    const bodyFile = join(directory, 'body with spaces.json');
+    writeFileSync(bodyFile, JSON.stringify(body));
+    assert.deepEqual(azureBody(['rest', '--body', `@${bodyFile}`]), body);
+    writeFileSync(bodyFile, '{');
+    assert.throws(() => azureBody(['--body', `@${bodyFile}`]), SyntaxError);
+    assert.throws(() => azureBody(['--body', `@${join(directory, 'missing.json')}`]), { code: 'ENOENT' });
+  } finally { rmSync(directory, { recursive: true }); }
   const options = { group: 'weather-prod', subscription: 'synthetic', appName: 'weather-api', jobName: 'weather-migrate' };
   let exists = false;
   let app = null;
   let job = null;
   const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
     const args = azureCliArgs(binary, executableArgs);
+    assert.equal(azureBody(args), null);
     if (args[0] === 'group') return JSON.stringify(exists);
     const path = new URL(args[args.indexOf('--url') + 1]).pathname;
     return JSON.stringify({ value: path.endsWith('/containerApps') ? (app ? [app] : []) : (job ? [job] : []) });
@@ -343,7 +372,7 @@ test(`first deployment: ${scenario}`, async () => {
     if (path.endsWith('/jobs')) return JSON.stringify({ value: ['missing-job', 'core-missing-job'].includes(scenario) ? [] : [{ name: 'weather-migrate' }] });
     if (path.endsWith('/weather-migrate')) return JSON.stringify({ properties: { template } });
     if (path.endsWith('/start')) {
-      executionTemplate = JSON.parse(args[args.indexOf('--body') + 1]);
+      executionTemplate = azureBody(args);
       assert.equal(executionTemplate.containers[0].image, image);
       assert.deepEqual(executionTemplate.containers[0].command, ['npm']);
       assert.deepEqual(executionTemplate.containers[0].args, ['run', 'migrate']);
@@ -439,7 +468,7 @@ test(`human SQL Job token lifecycle: ${scenario}`, async () => {
     if (args[0] === 'account' && args[1] === 'get-access-token') return '{"accessToken":"synthetic-token"}';
     const path = new URL(args[args.indexOf('--url') + 1]).pathname;
     const method = args[args.indexOf('--method') + 1];
-    const body = args.includes('--body') ? JSON.parse(args[args.indexOf('--body') + 1]) : null;
+    const body = azureBody(args);
     if (path.endsWith('/weather-migrate')) {
       if (method === 'patch') {
         secretUpdates.push(body.properties.configuration.secrets);
