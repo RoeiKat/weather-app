@@ -10,7 +10,7 @@ The application provides a React-based user interface backed by a Node.js/TypeSc
 
 ### Architecture Diagram
 
-![Azure weather application architecture: Front Door, static frontend, Container Apps, private PostgreSQL, and CI/CD](assets/azure-architecture.png)
+![Azure weather application architecture: Front Door, static frontend, Container Apps, private PostgreSQL, and CI/CD](docs/architecture/azure_architecture.png)
 
 _Architecture diagram extracted from the submitted [architecture document](docs/submission/architecture-overview.docx)._
 
@@ -71,6 +71,6 @@ Terraform and CI/CD have separate ownership: Terraform defines infrastructure, i
 
 - **[Architecture overview and selection rationale (DOCX)](docs/submission/architecture-overview.docx)** — original submission document, including the selected design, alternatives and key trade-offs.
 - **[AI usage and prompt/response record (DOCX)](docs/submission/ai-usage-report.docx)** — original ChatGPT transcript and explanation of Copilot, agent instructions and deployment automation.
-- **[Architecture diagram (PNG)](docs/architecture/azure-architecture.png)** — extracted directly from the architecture document and embedded above.
+- **[Architecture diagram (PNG)](docs/architecture/azure_architecture.png)** — extracted directly from the architecture document and embedded above.
 
 The detailed ADRs and any additional AI/Copilot investigation files maintained in the project repository provide the deeper decision history. This README is the high-level entry point for reviewers.
