@@ -9,6 +9,13 @@ resource "azurerm_virtual_network" "app" {
   resource_group_name = azurerm_resource_group.app.name
   address_space       = ["10.42.0.0/16"]
   tags                = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_subnet" "aca" {
@@ -46,6 +53,13 @@ resource "azurerm_private_dns_zone" "database" {
   name                = "${var.name}-private.postgres.database.azure.com"
   resource_group_name = azurerm_resource_group.app.name
   tags                = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "database" {
@@ -59,6 +73,13 @@ resource "azurerm_network_security_group" "database" {
   location            = local.location
   resource_group_name = azurerm_resource_group.app.name
   tags                = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 locals {

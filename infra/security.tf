@@ -3,6 +3,13 @@ resource "azurerm_user_assigned_identity" "api" {
   location            = local.location
   resource_group_name = azurerm_resource_group.app.name
   tags                = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_user_assigned_identity" "migration" {
@@ -10,6 +17,13 @@ resource "azurerm_user_assigned_identity" "migration" {
   location            = local.location
   resource_group_name = azurerm_resource_group.app.name
   tags                = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_container_registry" "backend" {
@@ -21,6 +35,13 @@ resource "azurerm_container_registry" "backend" {
   admin_enabled                 = false
   public_network_access_enabled = true
   tags                          = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_role_assignment" "pull" {
@@ -52,6 +73,13 @@ resource "azurerm_key_vault" "app" {
   soft_delete_retention_days    = 7
   public_network_access_enabled = true
   tags                          = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_role_assignment" "weather_secret" {

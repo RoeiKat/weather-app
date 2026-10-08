@@ -7,4 +7,11 @@ resource "azurerm_resource_group" "app" {
   name     = "${var.name}-prod"
   location = local.location
   tags     = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }

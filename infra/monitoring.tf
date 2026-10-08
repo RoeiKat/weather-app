@@ -6,6 +6,13 @@ resource "azurerm_log_analytics_workspace" "app" {
   retention_in_days   = 30
   daily_quota_gb      = 1
   tags                = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_monitor_diagnostic_setting" "frontdoor" {
@@ -47,6 +54,13 @@ resource "azurerm_monitor_action_group" "operations" {
     email_address = var.alert_email
   }
   tags = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_monitor_metric_alert" "metric" {
@@ -72,6 +86,13 @@ resource "azurerm_monitor_metric_alert" "metric" {
     action_group_id = azurerm_monitor_action_group.operations.id
   }
   tags = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_monitor_activity_log_alert" "database_health" {
@@ -89,6 +110,13 @@ resource "azurerm_monitor_activity_log_alert" "database_health" {
     action_group_id = azurerm_monitor_action_group.operations.id
   }
   tags = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "revisions" {
@@ -119,4 +147,11 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "revisions" {
     action_groups = [azurerm_monitor_action_group.operations.id]
   }
   tags = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }

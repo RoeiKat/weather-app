@@ -34,7 +34,12 @@ resource "azurerm_postgresql_flexible_server" "database" {
   ]
 
   lifecycle {
-    ignore_changes = [zone, high_availability[0].standby_availability_zone]
+    ignore_changes = [
+      zone,
+      high_availability[0].standby_availability_zone,
+      tags["created_By"],
+      tags["created_Date"],
+    ]
   }
 }
 

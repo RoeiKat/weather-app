@@ -133,6 +133,36 @@ run "api_from_prepared_digest" {
     condition     = local.api_env.ALLOWED_ORIGINS == output.public_url && azurerm_postgresql_flexible_server.database.high_availability[0].mode == "ZoneRedundant"
     error_message = "Bootstrap must preserve the generated allowed origin and PostgreSQL cross-AZ HA."
   }
+  assert {
+    condition = alltrue([
+      for tags in concat([
+        azurerm_resource_group.app.tags,
+        azurerm_virtual_network.app.tags,
+        azurerm_private_dns_zone.database.tags,
+        azurerm_network_security_group.database.tags,
+        azurerm_user_assigned_identity.api.tags,
+        azurerm_user_assigned_identity.migration.tags,
+        azurerm_container_registry.backend.tags,
+        azurerm_key_vault.app.tags,
+        azurerm_postgresql_flexible_server.database.tags,
+        azurerm_storage_account.frontend.tags,
+        azurerm_container_app_environment.app.tags,
+        azurerm_container_app.api[0].tags,
+        azurerm_container_app_job.migrate.tags,
+        azurerm_cdn_frontdoor_profile.app.tags,
+        azurerm_cdn_frontdoor_endpoint.app.tags,
+        azurerm_cdn_frontdoor_firewall_policy.app.tags,
+        azurerm_log_analytics_workspace.app.tags,
+        azurerm_monitor_action_group.operations.tags,
+        azurerm_monitor_activity_log_alert.database_health.tags,
+        azurerm_monitor_scheduled_query_rules_alert_v2.revisions.tags,
+      ], [for alert in azurerm_monitor_metric_alert.metric : alert.tags]) :
+      tags.application == "weather" &&
+      tags.environment == "production" &&
+      tags.managed_by == "terraform"
+    ])
+    error_message = "Ignoring Azure policy tag drift must preserve our Terraform-managed application, environment and managed_by tags on every tagged resource."
+  }
 }
 
 run "first_apply_compatibility" {

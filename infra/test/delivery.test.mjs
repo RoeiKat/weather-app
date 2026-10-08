@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test, mock } from 'node:test';
 import { candidateTraffic, findResource, immutableImage, productionTraffic, promotedTraffic, smoke } from '../scripts/azure.mjs';
@@ -21,6 +21,33 @@ const appFixture = () => ({
     latestRevisionName: 'weather-api--old',
     configuration: { ingress: { targetPort: 3000, traffic: structuredClone(original), ipSecurityRestrictions: [{ action: 'Allow', ipAddressRange: '192.0.2.0/24' }] } },
   },
+});
+
+test('main-root tagged resources ignore only policy tag keys and existing lifecycle-owned fields', () => {
+  const root = resolve(import.meta.dirname, '..');
+  const resources = readdirSync(root).filter((file) => file.endsWith('.tf')).flatMap((file) =>
+    [...readFileSync(join(root, file), 'utf8').matchAll(/^resource "([^"]+)" "([^"]+)" \{([\s\S]*?)^\}/gm)]
+  ).filter(([, , , body]) => /^  tags\s*=/m.test(body));
+  const existingIgnores = {
+    'azurerm_container_app.api': [
+      'template[0].container[0].image', 'template[0].revision_suffix', 'ingress[0].traffic_weight',
+    ],
+    'azurerm_container_app_job.migrate': ['template[0].container[0].image'],
+    'azurerm_postgresql_flexible_server.database': ['zone', 'high_availability[0].standby_availability_zone'],
+  };
+  assert.equal(resources.length, 21, 'Every tagged main-root resource must be checked.');
+  for (const [, type, name, body] of resources) {
+    const address = `${type}.${name}`;
+    const lifecycle = [...body.matchAll(/^  lifecycle \{\r?\n([\s\S]*?)^  \}/gm)];
+    assert.equal(lifecycle.length, 1, `${address} must have exactly one lifecycle block.`);
+    const ignored = lifecycle[0][1].match(/^    ignore_changes\s*=\s*\[\r?\n([\s\S]*?)^    \]/m);
+    assert.ok(ignored, `${address} must have an explicit ignore list.`);
+    const entries = ignored[1].trim().split(/\r?\n/).map((entry) => entry.trim().replace(/,$/, ''));
+    assert.deepEqual(entries, [
+      ...(existingIgnores[address] ?? []), 'tags["created_By"]', 'tags["created_Date"]',
+    ], `${address} must retain existing ignores and ignore only the two policy-owned tag keys.`);
+    assert.match(body, /^  tags\s*=\s*local\.tags$/m, `${address} must retain Terraform-managed tags.`);
+  }
 });
 
 test('release fields are named, immutable and retain known-good traffic', () => {

@@ -3,12 +3,26 @@ resource "azurerm_cdn_frontdoor_profile" "app" {
   resource_group_name = azurerm_resource_group.app.name
   sku_name            = "Standard_AzureFrontDoor"
   tags                = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_cdn_frontdoor_endpoint" "app" {
   name                     = "${var.name}-public"
   cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.app.id
   tags                     = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_cdn_frontdoor_origin_group" "origin" {
@@ -272,6 +286,13 @@ resource "azurerm_cdn_frontdoor_firewall_policy" "app" {
     }
   }
   tags = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 resource "azurerm_cdn_frontdoor_security_policy" "app" {

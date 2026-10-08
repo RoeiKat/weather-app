@@ -13,6 +13,13 @@ resource "azurerm_container_app_environment" "app" {
     workload_profile_type = "Consumption"
   }
   tags = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_By"],
+      tags["created_Date"],
+    ]
+  }
 }
 
 locals {
@@ -140,7 +147,9 @@ resource "azurerm_container_app" "api" {
     ignore_changes = [
       template[0].container[0].image,
       template[0].revision_suffix,
-      ingress[0].traffic_weight
+      ingress[0].traffic_weight,
+      tags["created_By"],
+      tags["created_Date"],
     ]
     precondition {
       condition     = startswith(var.bootstrap_image, "${azurerm_container_registry.backend.login_server}/")
@@ -189,6 +198,10 @@ resource "azurerm_container_app_job" "migrate" {
   tags       = local.tags
   depends_on = [azurerm_role_assignment.pull]
   lifecycle {
-    ignore_changes = [template[0].container[0].image]
+    ignore_changes = [
+      template[0].container[0].image,
+      tags["created_By"],
+      tags["created_Date"],
+    ]
   }
 }
