@@ -487,7 +487,14 @@ test('frontend smoke permits only real anonymous static 404s, never immutable er
     if (path === '/assets/index-synthetic.js') return new Response(script, { headers: {
       'Cache-Control': 'public, max-age=31536000, immutable', 'Content-Type': 'text/javascript',
     } });
-    if (['/assets/not-a-real-release-file.js', '/not-a-client-route', '/api/v1/not-a-route'].includes(path)) {
+    if (path === '/api/v1/not-a-route') {
+      return new Response(JSON.stringify({ error: {
+        code: bad === 'api-shape' ? 'INTERNAL_ERROR' : 'VALIDATION_ERROR',
+        message: 'Unsupported route.', requestId: 'req_synthetic',
+      } }), { status: bad === 'api-success' ? 200 : 400,
+        headers: bad === 'private-cache' ? {} : { 'Cache-Control': 'no-store' } });
+    }
+    if (['/assets/not-a-real-release-file.js', '/not-a-client-route'].includes(path)) {
       return new Response('synthetic error document', {
         status: bad === 'success-shaped' && path.startsWith('/assets/') ? 200 : 404,
         headers: path.startsWith('/assets/')
@@ -502,6 +509,9 @@ test('frontend smoke permits only real anonymous static 404s, never immutable er
     await frontendSmoke('https://weather.example', files);
     for (bad of ['success-shaped', 'immutable', 'private-cache']) {
       await assert.rejects(frontendSmoke('https://weather.example', files), /404\/cache-isolation/);
+    }
+    for (bad of ['api-success', 'api-shape']) {
+      await assert.rejects(frontendSmoke('https://weather.example', files), /Unsupported API route/);
     }
   } finally { fetchMock.mock.restore(); }
 });

@@ -65,8 +65,17 @@ export async function frontendSmoke(url, files) {
       !response.headers.get('content-type')?.includes('javascript')) throw new Error('Asset MIME/cache/bytes smoke failed.');
   for (const path of ['/assets/not-a-real-release-file.js', '/not-a-client-route', '/api/v1/not-a-route']) {
     const missing = await fetch(`${url}${path}`, { signal: AbortSignal.timeout(15_000) });
-    await missing.body?.cancel();
     const cache = missing.headers.get('cache-control');
+    if (path.startsWith('/api/')) {
+      const body = await missing.json();
+      if (missing.status !== 400 || !cache?.includes('no-store') ||
+          body.error?.code !== 'VALIDATION_ERROR' || typeof body.error?.message !== 'string' ||
+          typeof body.error?.requestId !== 'string' || !body.error.requestId) {
+        throw new Error(`Unsupported API route/cache-isolation smoke failed: ${path}`);
+      }
+      continue;
+    }
+    await missing.body?.cancel();
     // Storage website error responses omit blob Cache-Control metadata. This
     // anonymous static 404 is not a private API response or an immutable asset.
     const safeCache = path.startsWith('/assets/')

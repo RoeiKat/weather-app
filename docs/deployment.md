@@ -94,6 +94,9 @@ immutable for one year. Storage website missing-asset responses are real,
 anonymous HTML 404s and omit blob Cache-Control metadata; these may be negatively
 cached by the static assets route, but must never be treated as immutable
 successful assets. Unknown navigation and API errors must still be no-store.
+The existing backend intentionally returns 400 `VALIDATION_ERROR` for an
+unsupported API route/method; delivery verifies that JSON envelope instead of
+incorrectly expecting a static 404 from the API.
 Requests sent to Storage have credentials removed. Normal releases need no
 Front Door purge: HTML is not cached and changed assets use new names.
 

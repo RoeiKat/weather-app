@@ -95,6 +95,14 @@ tested and limited to anonymous static errors. It does not cache authenticated
 responses or bypass Front Door. The public frontend was functional despite the
 original overly strict smoke result.
 
+The automatic-delivery investigation found another precise contract mismatch:
+`/api/v1/not-a-route` returns **400**, `no-store`, JSON `VALIDATION_ERROR` by the
+existing backend's deliberate unsupported-route/method handler. The frontend
+delivery validator incorrectly expected 404 for this API route as well as
+static missing files. The smallest fix preserves backend behavior and requires
+the actual 400 error envelope and no-store; it still rejects 200, HTML fallbacks,
+incorrect error codes and cacheable private errors. No application route changed.
+
 ## Investigation, tools and live actions
 
 - Git status/log/branch/remote; repository contract, requirements, ADR index,
