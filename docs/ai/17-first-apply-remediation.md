@@ -226,3 +226,67 @@ before the failure. After a separately approved apply, verify PgBouncer
 enablement, Azure-managed defaults/transaction pooling, and API/database
 connectivity. Do not reuse the failed saved plan or infer apply authorization
 from this remediation.
+
+## Windows Azure CLI wrapper and delivery mocks (2026-10-08)
+
+- **Author/tool:** AI assistant using Copilot SDK in VS Code; model Unknown.
+- **Human decision owner:** Requesting user.
+- **Approval reference:** The requesting user's explicit follow-up instruction
+  in this conversation on 2026-10-08 to preserve the working Windows CLI fix,
+  extract a small command-construction helper, fix cross-platform mocks, retain
+  all scenarios/assertions, and pass all 26 delivery tests.
+- **Final human decision:** Approved for scoped helper/test refactoring.
+  No Azure mutation authorized; infrastructure approval remains
+  **Approved for re-plan, not yet applied**.
+
+**Prompt (faithful summary):** The Windows fix invokes Azure CLI through
+`cmd.exe` and works, but broke mocked delivery tests. Do not revert it. Support
+mocking Linux's `az` executable and Windows's `cmd.exe /d /s /c az ...` through
+one shared command-construction helper rather than duplicated platform parsing.
+Run the existing delivery suite with all 26 tests passing and document the fix.
+Do not run Azure mutations.
+
+**Problem/cause:** The scenario mocks assumed `execFileSync` directly received
+`az` with the Azure command at argument index zero. The working Windows wrapper
+instead selects `ComSpec` (falling back to `cmd.exe`) and prefixes the arguments
+with `/d`, `/s`, `/c`, and `az`. The executable assertion and command-position
+checks therefore failed or misinterpreted the wrapper arguments. The user
+reported successful live Windows CLI execution; that live result was not
+repeated during this task.
+
+**Accepted fix:**
+
+- Extract `azureCommand` in the existing
+  [Azure helper](../../infra/scripts/azure.mjs). It returns the executable and
+  argument array: direct `az` on Linux, or the existing `ComSpec`/`cmd.exe`
+  wrapper on Windows. Production `az()` uses that helper without changing its
+  output flags, execution options, JSON parsing, or sanitized error handling.
+- Use one `azureCliArgs` test helper in the existing
+  [delivery tests](../../infra/test/delivery.test.mjs) to verify the selected
+  executable, unwrap the shared prefix, and verify the JSON/error-output flags.
+  All Azure command mocks use it; human SQL tests retain the separate mocked
+  Terraform-output branch.
+- Test both platform command shapes explicitly in the existing fingerprint
+  test, including a synthetic custom `ComSpec` path containing spaces,
+  preservation of JSON arguments containing spaces/quotes, and unchanged input
+  arguments. All 26 existing test cases remain; none were added or removed.
+- Preserve all release, bootstrap, rollback, failure, drift, token cleanup,
+  and security assertions. The previous hard-coded executable assertion is now
+  the equivalent platform-aware assertion in the shared mock helper.
+
+**Rejected/out of scope:** Reverting the Windows wrapper, repeating
+platform-specific argument parsing in every scenario, weakening scenario
+assertions, changing delivery behavior, or running live Azure commands.
+
+**Verification:** With existing Node **24.15.0**,
+`node --test .\infra\test\delivery.test.mjs` passed:
+**26 tests, 26 passed, 0 failed, 0 skipped, 0 cancelled**. The suite ran on
+Windows; Linux command construction was tested explicitly, not by running the
+suite on a Linux host. Whitespace, local documentation links/status, and
+changed-file scope checks passed.
+
+Only the Azure helper, delivery tests, and this record changed. The pre-existing
+working Windows fix was retained. No dependencies were installed. Terraform
+validation was not rerun for this JavaScript-only fix. Infrastructure settings
+were unchanged, and no live Azure command/mutation was executed. Release/admin
+messages in test output describe mocked fixtures, not real deployments.

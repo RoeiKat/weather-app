@@ -4,7 +4,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test, mock } from 'node:test';
-import { candidateTraffic, findResource, immutableImage, productionTraffic, promotedTraffic, smoke } from '../scripts/azure.mjs';
+import { azureCommand, candidateTraffic, findResource, immutableImage, productionTraffic, promotedTraffic, smoke } from '../scripts/azure.mjs';
 import { extract } from '../scripts/frontdoor-prefixes.mjs';
 import { artifactFiles, sha256, verifyManifest } from '../scripts/frontend-release.mjs';
 import { release } from '../scripts/backend-release.mjs';
@@ -22,6 +22,15 @@ const appFixture = () => ({
     configuration: { ingress: { targetPort: 3000, traffic: structuredClone(original), ipSecurityRestrictions: [{ action: 'Allow', ipAddressRange: '192.0.2.0/24' }] } },
   },
 });
+
+function azureCliArgs(binary, args) {
+  const command = azureCommand([]);
+  assert.equal(binary, command.executable);
+  assert.deepEqual(args.slice(0, command.args.length), command.args);
+  const cliArgs = args.slice(command.args.length);
+  assert.deepEqual(cliArgs.slice(-3), ['--only-show-errors', '--output', 'json']);
+  return cliArgs;
+}
 
 test('main-root tagged resources ignore only policy tag keys and existing lifecycle-owned fields', () => {
   const root = resolve(import.meta.dirname, '..');
@@ -140,8 +149,8 @@ test(`release orchestration: ${scenario}`, async () => {
   const jobTemplate = { containers: [{ name: 'migration', image, command: ['npm'], args: ['run', 'migrate'], env: [] }] };
   let started = false;
   let smokeRequests = 0;
-  const command = mock.method(childProcess, 'execFileSync', (_binary, args) => {
-    assert.equal(_binary, 'az');
+  const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
+    const args = azureCliArgs(binary, executableArgs);
     if (args[0] === 'group' && args[1] === 'exists') return 'true';
     const url = new URL(args[args.indexOf('--url') + 1]);
     const method = args[args.indexOf('--method') + 1];
@@ -252,11 +261,22 @@ test(`release orchestration: ${scenario}`, async () => {
 }
 
 test('first-plan fingerprint supports absent group/resources and detects their creation; Azure errors fail closed', () => {
+  const cliArgs = ['rest', '--method', 'patch', '--body', JSON.stringify({ message: 'synthetic "value" with spaces' })];
+  const originalArgs = [...cliArgs];
+  assert.deepEqual(azureCommand(cliArgs, 'linux'), { executable: 'az', args: cliArgs });
+  assert.deepEqual(azureCommand(cliArgs, 'win32', null), {
+    executable: 'cmd.exe', args: ['/d', '/s', '/c', 'az', ...cliArgs],
+  });
+  assert.deepEqual(azureCommand(cliArgs, 'win32', 'C:\\Synthetic Shell\\cmd.exe'), {
+    executable: 'C:\\Synthetic Shell\\cmd.exe', args: ['/d', '/s', '/c', 'az', ...cliArgs],
+  });
+  assert.deepEqual(cliArgs, originalArgs);
   const options = { group: 'weather-prod', subscription: 'synthetic', appName: 'weather-api', jobName: 'weather-migrate' };
   let exists = false;
   let app = null;
   let job = null;
-  const command = mock.method(childProcess, 'execFileSync', (_binary, args) => {
+  const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
+    const args = azureCliArgs(binary, executableArgs);
     if (args[0] === 'group') return JSON.stringify(exists);
     const path = new URL(args[args.indexOf('--url') + 1]).pathname;
     return JSON.stringify({ value: path.endsWith('/containerApps') ? (app ? [app] : []) : (job ? [job] : []) });
@@ -313,7 +333,8 @@ test(`first deployment: ${scenario}`, async () => {
   const template = { containers: [{ name: 'migration', image, command: ['npm'], args: ['run', 'migrate'], env: [] }] };
   let started = false;
   let executionTemplate;
-  const command = mock.method(childProcess, 'execFileSync', (_binary, args) => {
+  const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
+    const args = azureCliArgs(binary, executableArgs);
     if (args[0] === 'group') return 'true';
     const path = new URL(args[args.indexOf('--url') + 1]).pathname;
     const method = args[args.indexOf('--method') + 1];
@@ -409,8 +430,9 @@ test(`human SQL Job token lifecycle: ${scenario}`, async () => {
   let started = false;
   let executionTemplate;
   const secretUpdates = [];
-  const command = mock.method(childProcess, 'execFileSync', (binary, args) => {
+  const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
     if (binary === 'terraform') return JSON.stringify(values);
+    const args = azureCliArgs(binary, executableArgs);
     if (args[0] === 'account' && args[1] === 'show') {
       return JSON.stringify({ user: { type: scenario === 'nonhuman-credential' ? 'servicePrincipal' : 'user' } });
     }
