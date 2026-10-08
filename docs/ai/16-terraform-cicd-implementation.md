@@ -367,11 +367,23 @@ nonsecret database bootstrap outputs, verifies the matching private host,
 obtains the logged-in human's short-lived Entra SQL token, stores it transiently
 as a Job secret and executes the actual [principal SQL](../../infra/scripts/bootstrap-database.sql)
 over direct port 5432/TLS from inside the existing VNet.
-It then removes the temporary Job secret in `finally`, including failure paths.
+It waits for token attachment to finish provisioning before starting the Job,
+then removes the temporary Job secret in `finally`, including failure paths.
+Removal is reported successful only after a read-back confirms provisioning
+has succeeded and the secret is absent (`null`/omitted is Azure's empty shape).
+The start override uses only the documented execution-template fields, not
+the full Job template returned by GET.
 If Azure rejects cleanup, an explicit token-removal error stops the operation;
 remove `temporary-sql-admin` with authorized human access before any further
 workflow/plan. The helper does not silently claim cleanup succeeded.
 No token is put in GitHub, Terraform, receipt files or container command text.
+On Windows, the helper resolves the installed CLI's companion `python.exe`
+and invokes the same CLI module as `az.cmd`, without `cmd.exe`. REST bodies
+use temporary `@path` JSON files on all platforms; `@{path}` is not valid file
+syntax. Sanitized errors identify the failing operation and provider diagnostic.
+See the [bootstrap remediation record](19-windows-azure-cli-rest-bootstrap-remediation.md);
+human review of that remediation and approval for its next live command are
+pending.
 Do not run another workflow or Terraform plan while this human operation runs.
 The override uses human SQL credentials; **it does not make the migration UAMI
 an administrator** or change its normal template/identity.

@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -15,32 +15,97 @@ export function required(name) {
 export function azureCommand(
   args,
   platform = process.platform,
-  commandShell = process.env.ComSpec,
+  searchPath = process.env.PATH ?? "",
 ) {
-  return {
-    executable: platform === "win32" ? (commandShell ?? "cmd.exe") : "az",
-    args: platform === "win32" ? ["/d", "/s", "/c", "az", ...args] : [...args],
-  };
+  if (platform !== "win32") return { executable: "az", args: [...args] };
+  for (const entry of searchPath.split(";").filter(Boolean)) {
+    const directory = resolve(entry.replace(/^"(.*)"$/, "$1"));
+    const native = join(directory, "az.exe");
+    if (existsSync(native)) return { executable: native, args: [...args] };
+    if (!existsSync(join(directory, "az.cmd"))) continue;
+    // The Windows CLI launcher runs this bundled interpreter, without a shell.
+    const python = resolve(directory, "..", "python.exe");
+    if (!existsSync(python)) {
+      throw new Error("Azure CLI az.cmd has no companion python.exe; use the official Windows CLI installation.");
+    }
+    return { executable: python, args: ["-IBm", "azure.cli", ...args] };
+  }
+  throw new Error("Azure CLI was not found on PATH; install the official Windows CLI.");
 }
 
-export function az(args) {
+function bodyStrings(value) {
+  if (typeof value === "string") return value ? [value] : [];
+  if (value && typeof value === "object") return Object.values(value).flatMap(bodyStrings);
+  return [];
+}
+
+function cliDiagnostic(stderr, redactions) {
+  if (!stderr) return "Azure CLI returned no diagnostic on stderr.";
+  const lines = String(stderr).split(/\r?\n/);
+  const line = lines.find((item) => /^ERROR:\s*/.test(item)) ?? lines[0];
+  const jsonStart = line.indexOf("{");
+  let detail = "";
+  if (jsonStart !== -1) {
+    try {
+      const document = JSON.parse(line.slice(jsonStart).replace(/\)\s*$/, ""));
+      const error = document.error;
+      if (typeof error?.code === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,100}$/.test(error.code)) {
+        detail = ` ${error.code}: ${typeof error.message === "string" ? error.message : ""}`;
+      } else if (typeof document.title === "string" && document.errors && typeof document.errors === "object") {
+        const messages = Object.values(document.errors).flat().filter((value) => typeof value === "string").slice(0, 3);
+        detail = ` ${document.title} ${messages.join("; ")}`;
+      }
+    } catch {
+      detail = " (structured stderr omitted)";
+    }
+  }
+  // Project the error summary before redaction, excluding all other JSON fields.
+  let text = (line.slice(0, jsonStart === -1 ? undefined : jsonStart).replace(/\($/, "") + detail)
+    .split(/[\r\n{[]|request body|response body|request headers|response headers/i)[0];
+  const privateValues = [
+    ...redactions,
+    ...Object.entries(process.env)
+      .filter(([name]) => /secret|token|password|credential|connection|pgadmin|key/i.test(name))
+      .map(([, value]) => value),
+  ].filter(Boolean);
+  for (const value of [...new Set(privateValues)].sort((a, b) => b.length - a.length)) {
+    text = text.split(value).join("[REDACTED]");
+    text = text.split(JSON.stringify(value).slice(1, -1)).join("[REDACTED]");
+  }
+  text = text
+    .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED]");
+  // Only the summary is exposed, never echoed JSON, headers, bodies or stdout.
+  return text
+    .replace(/\b(authorization|password|access[_-]?token|token|secret|connection[_-]?string)\s*[:=].*$/gi, "$1: [REDACTED]")
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .slice(0, 1000).trim() || "Azure CLI diagnostic omitted because it contained only structured data.";
+}
+
+export function az(args, { operation = "", redactions = [] } = {}) {
+  const name = args[0] === "rest" ? `rest ${args[args.indexOf("--method") + 1]}` : args.slice(0, 2).join(" ");
+  const label = `Azure command failed: ${name}${operation ? ` (${operation})` : ""}`;
   // Do not echo command bodies, Azure responses, credentials or application config.
+  const command = azureCommand([...args, "--only-show-errors", "--output", "json"]);
+  let result;
   try {
-    const cliArgs = [...args, "--only-show-errors", "--output", "json"];
-    const command = azureCommand(cliArgs);
-    const result = execFileSync(command.executable, command.args, {
+    result = execFileSync(command.executable, command.args, {
       encoding: "utf8",
       timeout: 120_000,
       maxBuffer: 8 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
     });
-
-    return result.trim() ? JSON.parse(result) : null;
   } catch (error) {
     throw new Error(
-      `Azure command failed: ${args.slice(0, 2).join(" ")} ` +
-        `(code ${error.code ?? "unknown"}, status ${error.status ?? "none"}, signal ${error.signal ?? "none"})`,
+      `${label} (code ${error.code ?? "unknown"}, status ${error.status ?? "none"}, signal ${error.signal ?? "none"}). ` +
+        cliDiagnostic(error.stderr, [...redactions, ...args.filter((arg) => arg.startsWith("@"))]),
     );
+  }
+  try {
+    return result.trim() ? JSON.parse(result) : null;
+  } catch {
+    throw new Error(`${label}. Azure CLI returned invalid JSON; response withheld.`);
   }
 }
 
@@ -48,38 +113,33 @@ export function resourceUrl(id, suffix = "") {
   return `https://management.azure.com${id}${suffix}?api-version=${apiVersion}`;
 }
 
-export function rest(method, id, body, suffix = "") {
+export function rest(method, id, body, suffix = "", operation = "") {
   const args = ["rest", "--method", method, "--url", resourceUrl(id, suffix)];
 
   if (!body) {
-    return az(args);
+    return az(args, { operation });
   }
 
-  // Windows cmd.exe can corrupt inline JSON quoting.
-  if (process.platform === "win32") {
-    const directory = mkdtempSync(join(tmpdir(), "weather-az-rest-"));
-    const bodyFile = join(directory, "body.json");
+  const json = JSON.stringify(body);
+  const directory = mkdtempSync(join(tmpdir(), "weather-az-rest-"));
+  const bodyFile = join(directory, "body.json");
 
-    try {
-      writeFileSync(bodyFile, JSON.stringify(body), {
-        encoding: "utf8",
-        mode: 0o600,
-      });
+  try {
+    writeFileSync(bodyFile, json, { encoding: "utf8", mode: 0o600 });
 
-      return az([...args, "--body", `@${bodyFile}`]);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
+    return az([...args, "--body", `@${bodyFile}`], {
+      operation, redactions: [json, ...bodyStrings(body)],
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
-
-  return az([...args, "--body", JSON.stringify(body)]);
 }
 
-export function list(id, suffix) {
+export function list(id, suffix, operation = "") {
   const result = [];
   let url = resourceUrl(id, suffix);
   for (let page = 0; page < 100; page++) {
-    const response = az(["rest", "--method", "get", "--url", url]);
+    const response = az(["rest", "--method", "get", "--url", url], { operation });
     if (!Array.isArray(response.value))
       throw new Error("Azure list returned an invalid shape.");
     result.push(...response.value);

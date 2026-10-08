@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import timers from 'node:timers/promises';
 import { join, resolve } from 'node:path';
 import { test, mock } from 'node:test';
-import { azureCommand, candidateTraffic, findResource, immutableImage, productionTraffic, promotedTraffic, smoke } from '../scripts/azure.mjs';
+import { az, azureCommand, candidateTraffic, findResource, immutableImage, productionTraffic, promotedTraffic, rest, smoke } from '../scripts/azure.mjs';
 import { extract } from '../scripts/frontdoor-prefixes.mjs';
 import { artifactFiles, sha256, verifyManifest } from '../scripts/frontend-release.mjs';
 import { release } from '../scripts/backend-release.mjs';
@@ -23,8 +25,8 @@ const appFixture = () => ({
   },
 });
 
-function azureCliArgs(binary, args, platform = process.platform, commandShell = process.env.ComSpec) {
-  const command = azureCommand([], platform, commandShell);
+function azureCliArgs(binary, args) {
+  const command = azureCommand([]);
   assert.equal(binary, command.executable);
   assert.deepEqual(args.slice(0, command.args.length), command.args);
   const cliArgs = args.slice(command.args.length);
@@ -36,8 +38,135 @@ function azureBody(args) {
   const index = args.indexOf('--body');
   if (index === -1) return null;
   const value = args[index + 1];
-  return JSON.parse(value.startsWith('@') ? readFileSync(value.slice(1), 'utf8') : value);
+  assert.ok(value.startsWith('@') && !value.startsWith('@{'), 'REST must use the CLI @path file convention, not literal @{path}.');
+  return JSON.parse(readFileSync(value.slice(1), 'utf8'));
 }
+
+function assertJobExecutionBody(body) {
+  assert.ok(Object.keys(body).every((key) => ['containers', 'initContainers'].includes(key)));
+  for (const container of [...body.containers, ...(body.initContainers ?? [])]) {
+    assert.ok(Object.keys(container).every((key) => ['name', 'image', 'command', 'args', 'env', 'resources'].includes(key)));
+  }
+}
+
+test('CLI transport is shell-free and resolves the installed Windows launcher interpreter', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'weather cli & % ! '));
+  const wbin = join(directory, 'wbin');
+  const args = ['rest', '--method', 'patch', '--body', `@${join(directory, 'body with spaces.json')}`];
+  const originalArgs = [...args];
+  try {
+    mkdirSync(wbin);
+    writeFileSync(join(wbin, 'az.cmd'), 'synthetic launcher');
+    const python = join(directory, 'python.exe');
+    writeFileSync(python, '');
+    for (const platform of ['linux', 'darwin']) {
+      assert.deepEqual(azureCommand(args, platform), { executable: 'az', args });
+    }
+    const command = azureCommand(args, 'win32', `"${wbin}"`);
+    assert.equal(command.executable, python);
+    assert.deepEqual(command.args, ['-IBm', 'azure.cli', ...args]);
+    assert.deepEqual(args, originalArgs);
+    assert.throws(() => azureCommand(args, 'win32', directory), /not found on PATH/);
+    rmSync(python);
+    assert.throws(() => azureCommand(args, 'win32', wbin), /no companion python.exe/);
+    writeFileSync(join(wbin, 'az.exe'), '');
+    assert.deepEqual(azureCommand(args, 'win32', wbin), { executable: join(wbin, 'az.exe'), args });
+  } finally { rmSync(directory, { recursive: true }); }
+});
+
+test('REST file transport preserves JSON and removes the file after success, CLI failure or invalid output', () => {
+  const id = '/subscriptions/synthetic/resourceGroups/weather-prod/providers/Microsoft.App/jobs/weather-migrate';
+  const body = { properties: { configuration: { secrets: [{ name: 'temporary-sql-admin', value: 'synthetic-private-token' }] } },
+    text: 'spaces "quotes" \\ slashes\n & | % ! ^ < >', args: ['node', '--eval', 'console.log("synthetic")'] };
+  let scenario = 'success';
+  const files = [];
+  const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
+    const args = azureCliArgs(binary, executableArgs);
+    assert.deepEqual(azureBody(args), body);
+    assert.equal(executableArgs.some((arg) => arg.includes('synthetic-private-token')), false);
+    assert.equal(new URL(args[args.indexOf('--url') + 1]).searchParams.get('api-version'), '2025-07-01');
+    files.push(args[args.indexOf('--body') + 1].slice(1));
+    if (scenario === 'failure') {
+      throw Object.assign(new Error(`Raw command ${JSON.stringify(body)}`), {
+        status: 1, stderr: `ERROR: Unsupported Media Type({"error":{"code":"UnsupportedMediaType","message":"Content type is not supported."},"request":${JSON.stringify(body)}})`,
+      });
+    }
+    return scenario === 'invalid-output' ? '{"accessToken":"synthetic-private-token"' : '{"ok":true}';
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(rest('patch', id, body, '', 'Attach temporary SQL administrator token'), { ok: true });
+    scenario = 'failure';
+    assert.throws(() => rest('patch', id, body, '', 'Attach temporary SQL administrator token'), (error) => {
+      assert.match(error.message, /rest patch \(Attach temporary SQL administrator token\)/);
+      assert.match(error.message, /UnsupportedMediaType: Content type is not supported/);
+      assert.equal(error.message.includes('synthetic-private-token'), false);
+      assert.equal(error.message.includes(JSON.stringify(body)), false);
+      assert.equal(error.cause, undefined, 'Raw subprocess error must not be retained.');
+      return true;
+    });
+    scenario = 'invalid-output';
+    assert.throws(() => rest('patch', id, body), /invalid JSON; response withheld/);
+    const cyclic = {};
+    cyclic.self = cyclic;
+    assert.throws(() => rest('patch', id, cyclic), /circular/i);
+    assert.equal(files.length, 3, 'Invalid input must fail before allocating a body file or executing the CLI.');
+    for (const file of files) {
+      assert.equal(existsSync(file), false);
+      assert.equal(existsSync(resolve(file, '..')), false);
+    }
+    assert.equal(azureBody(['group', 'exists']), null);
+    assert.throws(() => azureBody(['rest', '--body', `@${files[0]}`]), { code: 'ENOENT' });
+    const fixtureDirectory = mkdtempSync(join(tmpdir(), 'weather-body-fixture-'));
+    try {
+      const fixture = join(fixtureDirectory, 'body with spaces.json');
+      writeFileSync(fixture, '{');
+      assert.throws(() => azureBody(['rest', '--body', `@${fixture}`]), SyntaxError);
+      assert.throws(() => azureBody(['rest', '--body', `@{${fixture}}`]), /@path file convention/);
+    } finally { rmSync(fixtureDirectory, { recursive: true }); }
+  } finally { command.mock.restore(); syncBuiltinESMExports(); }
+});
+
+test('CLI diagnostics expose errors, not tokens, bodies, personal data or raw process output', () => {
+  const previous = process.env.SYNTHETIC_ACCESS_TOKEN;
+  process.env.SYNTHETIC_ACCESS_TOKEN = 'synthetic-environment-token';
+  let stderr;
+  const command = mock.method(childProcess, 'execFileSync', () => {
+    throw Object.assign(new Error('Raw command contains synthetic-private-token'), {
+      code: 'ETIMEDOUT', status: 1, signal: 'SIGTERM', stderr,
+      stdout: '{"accessToken":"synthetic-stdout-token"}',
+    });
+  });
+  syncBuiltinESMExports();
+  try {
+    for (stderr of [
+      'ERROR: (AuthorizationFailed) Permission denied.\nRequest body: {"secret":"synthetic-private-token"}',
+      'ERROR: Bad Request({"error":{"code":"InvalidParameter","message":"Invalid input."},"request":{"secret":"synthetic-private-token"}})',
+      'ERROR: Bad Request({"title":"One or more validation errors occurred.","status":400,"errors":{"$":["Unknown properties volumes in StartJobExecutionTemplate are not supported"]},"request":{"secret":"synthetic-private-token"}})',
+      'ERROR: Authentication failed for human@example.test using synthetic-environment-token',
+      'ERROR: Authorization: Bearer eyJsynthetic.eyJpayload.syntheticSignature',
+      'ERROR: Password=synthetic-unstructured-password',
+      'ERROR: Invalid JSON {"secrets":[{"value":"synthetic-private-token"}]}',
+      undefined,
+    ]) {
+      assert.throws(() => az(['account', 'show']), (error) => {
+        assert.match(error.message, /code ETIMEDOUT, status 1, signal SIGTERM/);
+        for (const secret of ['synthetic-private-token', 'synthetic-stdout-token', 'synthetic-environment-token',
+          'human@example.test', 'eyJsynthetic', 'synthetic-unstructured-password', '"secrets"']) {
+          assert.equal(error.message.includes(secret), false);
+        }
+        if (stderr?.includes('AuthorizationFailed')) assert.match(error.message, /AuthorizationFailed.*Permission denied/);
+        if (stderr?.includes('InvalidParameter')) assert.match(error.message, /InvalidParameter: Invalid input/);
+        if (stderr?.includes('StartJobExecutionTemplate')) assert.match(error.message, /Unknown properties volumes in StartJobExecutionTemplate are not supported/);
+        return true;
+      });
+    }
+  } finally {
+    command.mock.restore(); syncBuiltinESMExports();
+    if (previous === undefined) delete process.env.SYNTHETIC_ACCESS_TOKEN;
+    else process.env.SYNTHETIC_ACCESS_TOKEN = previous;
+  }
+});
 
 test('main-root tagged resources ignore only policy tag keys and existing lifecycle-owned fields', () => {
   const root = resolve(import.meta.dirname, '..');
@@ -153,7 +282,10 @@ test(`release orchestration: ${scenario}`, async () => {
       template: originalTemplate,
     },
   }]));
-  const jobTemplate = { containers: [{ name: 'migration', image, command: ['npm'], args: ['run', 'migrate'], env: [] }] };
+  const jobTemplate = { containers: [{ name: 'migration', image, command: ['npm'], args: ['run', 'migrate'], env: [], probes: [],
+    resources: { cpu: 0.5, memory: '1Gi' } }], volumes: [], initContainers: scenario === 'success' ? [{
+      name: 'init', image, command: ['node'], args: ['--version'], env: [], probes: [], resources: { cpu: 0.5, memory: '1Gi' },
+    }] : [] };
   let started = false;
   let smokeRequests = 0;
   const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
@@ -167,6 +299,17 @@ test(`release orchestration: ${scenario}`, async () => {
     if (url.pathname.endsWith('/containerApps')) {
       result = { value: [app] };
     } else if (url.pathname.endsWith('/start')) {
+      assertJobExecutionBody(body);
+      assert.deepEqual(body.containers[0].resources, jobTemplate.containers[0].resources);
+      if (scenario === 'success') {
+        assert.equal(body.initContainers[0].image, image);
+        assert.deepEqual(body.initContainers[0].command, ['node']);
+        assert.deepEqual(body.initContainers[0].args, ['--version']);
+        assert.deepEqual(body.initContainers[0].env, []);
+        assert.deepEqual(body.initContainers[0].resources, { cpu: 0.5, memory: '1Gi' });
+        assert.deepEqual(jobTemplate.initContainers[0].probes, []);
+      }
+      assert.deepEqual(jobTemplate.volumes, [], 'The Terraform-owned platform template must remain unchanged.');
       assert.equal(body.containers[0].image, image);
       started = true;
       result = { name: 'execution1' };
@@ -268,37 +411,6 @@ test(`release orchestration: ${scenario}`, async () => {
 }
 
 test('first-plan fingerprint supports absent group/resources and detects their creation; Azure errors fail closed', () => {
-  const cliArgs = ['rest', '--method', 'patch', '--body', JSON.stringify({ message: 'synthetic "value" with spaces' })];
-  const originalArgs = [...cliArgs];
-  assert.deepEqual(azureCommand(cliArgs, 'linux'), { executable: 'az', args: cliArgs });
-  assert.deepEqual(azureCommand(cliArgs, 'darwin'), { executable: 'az', args: cliArgs });
-  assert.deepEqual(azureCommand(cliArgs, 'win32', null), {
-    executable: 'cmd.exe', args: ['/d', '/s', '/c', 'az', ...cliArgs],
-  });
-  assert.deepEqual(azureCommand(cliArgs, 'win32', 'C:\\Synthetic Shell\\cmd.exe'), {
-    executable: 'C:\\Synthetic Shell\\cmd.exe', args: ['/d', '/s', '/c', 'az', ...cliArgs],
-  });
-  assert.deepEqual(cliArgs, originalArgs);
-  const outputArgs = [...cliArgs, '--only-show-errors', '--output', 'json'];
-  for (const platform of ['linux', 'darwin', 'win32']) {
-    const command = azureCommand(outputArgs, platform, null);
-    assert.deepEqual(azureCliArgs(command.executable, command.args, platform, null), outputArgs);
-  }
-  const body = { message: 'synthetic "value" with spaces' };
-  assert.deepEqual(azureBody(cliArgs), body);
-  assert.equal(azureBody(['group', 'exists']), null);
-  assert.throws(() => azureBody(['--body', '{']), SyntaxError);
-  const parent = resolve('infra', 'validation-output');
-  mkdirSync(parent, { recursive: true });
-  const directory = mkdtempSync(join(parent, 'cli-body-test-'));
-  try {
-    const bodyFile = join(directory, 'body with spaces.json');
-    writeFileSync(bodyFile, JSON.stringify(body));
-    assert.deepEqual(azureBody(['rest', '--body', `@${bodyFile}`]), body);
-    writeFileSync(bodyFile, '{');
-    assert.throws(() => azureBody(['--body', `@${bodyFile}`]), SyntaxError);
-    assert.throws(() => azureBody(['--body', `@${join(directory, 'missing.json')}`]), { code: 'ENOENT' });
-  } finally { rmSync(directory, { recursive: true }); }
   const options = { group: 'weather-prod', subscription: 'synthetic', appName: 'weather-api', jobName: 'weather-migrate' };
   let exists = false;
   let app = null;
@@ -359,7 +471,7 @@ test(`first deployment: ${scenario}`, async () => {
   const directory = mkdtempSync(join(parent, 'bootstrap-test-'));
   const cwd = process.cwd();
   const environment = { ...process.env };
-  const template = { containers: [{ name: 'migration', image, command: ['npm'], args: ['run', 'migrate'], env: [] }] };
+  const template = { containers: [{ name: 'migration', image, command: ['npm'], args: ['run', 'migrate'], env: [], probes: [] }], volumes: [] };
   let started = false;
   let executionTemplate;
   const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
@@ -373,6 +485,7 @@ test(`first deployment: ${scenario}`, async () => {
     if (path.endsWith('/weather-migrate')) return JSON.stringify({ properties: { template } });
     if (path.endsWith('/start')) {
       executionTemplate = azureBody(args);
+      assertJobExecutionBody(executionTemplate);
       assert.equal(executionTemplate.containers[0].image, image);
       assert.deepEqual(executionTemplate.containers[0].command, ['npm']);
       assert.deepEqual(executionTemplate.containers[0].args, ['run', 'migrate']);
@@ -448,7 +561,12 @@ test('private human SQL bootstrap renders actual SQL phases safely and cannot ru
   }
 });
 
-for (const scenario of ['success', 'job-failure', 'cleanup-failure', 'nonhuman-credential']) {
+for (const scenario of ['success', 'job-failure', 'cleanup-failure', 'nonhuman-credential',
+  'initial-get-failure', 'initial-list-failure', 'existing-secret', 'overlap', 'mutable-image',
+  'attach-failure', 'attach-verification-failure', 'start-failure', 'execution-list-failure',
+  'poll-failure', 'cleanup-verification-failure', 'attach-and-cleanup-failure', 'secret-propagation',
+  'wrong-execution-image', 'wrong-execution-command', 'omitted-secrets', 'invalid-cleanup-secrets',
+  'unsupported-template']) {
 test(`human SQL Job token lifecycle: ${scenario}`, async () => {
   const environment = { ...process.env };
   const values = {
@@ -458,7 +576,20 @@ test(`human SQL Job token lifecycle: ${scenario}`, async () => {
   };
   let started = false;
   let executionTemplate;
+  let secrets = scenario === 'existing-secret' ? [{ name: 'temporary-sql-admin' }] : [];
+  let provisioningPending = false;
+  let attachmentVerified = false;
+  let pendingReads = 0;
   const secretUpdates = [];
+  const events = [];
+  const logs = [];
+  const log = mock.method(console, 'info', (message) => logs.push(message));
+  const pause = mock.method(timers, 'setTimeout', async () => {});
+  function cliFailure() {
+    throw Object.assign(new Error('Raw synthetic-token must not escape'), {
+      status: 1, stderr: 'ERROR: Bad Request({"error":{"code":"InvalidParameter","message":"Synthetic request rejected."}})',
+    });
+  }
   const command = mock.method(childProcess, 'execFileSync', (binary, executableArgs) => {
     if (binary === 'terraform') return JSON.stringify(values);
     const args = azureCliArgs(binary, executableArgs);
@@ -469,21 +600,41 @@ test(`human SQL Job token lifecycle: ${scenario}`, async () => {
     const path = new URL(args[args.indexOf('--url') + 1]).pathname;
     const method = args[args.indexOf('--method') + 1];
     const body = azureBody(args);
+    events.push({ method, path });
     if (path.endsWith('/weather-migrate')) {
+      let provisioningState = 'Succeeded';
       if (method === 'patch') {
-        secretUpdates.push(body.properties.configuration.secrets);
-        if (scenario === 'cleanup-failure' && body.properties.configuration.secrets.length === 0) {
-          throw Object.assign(new Error('synthetic cleanup error'), { status: 1 });
-        }
+        const update = body.properties.configuration.secrets;
+        secretUpdates.push(update);
+        if ((['attach-failure', 'attach-and-cleanup-failure'].includes(scenario) && update.length) ||
+            (['cleanup-failure', 'attach-and-cleanup-failure'].includes(scenario) && !update.length)) cliFailure();
+        secrets = update.map(({ name }) => ({ name }));
+        provisioningPending = scenario === 'secret-propagation';
+      } else {
+        if ((scenario === 'initial-get-failure' && !secretUpdates.length) ||
+            (scenario === 'attach-verification-failure' && secretUpdates.length === 1) ||
+            (scenario === 'cleanup-verification-failure' && secretUpdates.length === 2)) cliFailure();
+        if (provisioningPending) {
+          provisioningState = 'InProgress';
+          provisioningPending = false;
+          pendingReads++;
+        } else if (secretUpdates.length === 1 && secrets.length) attachmentVerified = true;
       }
       return JSON.stringify({ properties: {
-        configuration: { triggerType: 'Manual', secrets: [] },
+        provisioningState,
+        configuration: { triggerType: 'Manual',
+          ...(scenario === 'omitted-secrets' && !secrets.length ? {} : {
+            secrets: scenario === 'invalid-cleanup-secrets' && secretUpdates.length === 2 ? 'invalid shape' : secrets.length ? secrets : null,
+          }) },
         template: { containers: [{ name: 'migration', image, command: ['npm'], args: ['run', 'migrate'],
-          env: [{ name: 'PGHOST', value: values.fqdn }] }] },
+          env: [{ name: 'PGHOST', value: values.fqdn }], probes: [] }], volumes: scenario === 'unsupported-template' ? [{ name: 'unsupported' }] : [] },
       } });
     }
     if (path.endsWith('/start')) {
+      assert.equal(attachmentVerified, true, 'Do not start while the token PATCH is still provisioning.');
+      if (scenario === 'start-failure') cliFailure();
       executionTemplate = body;
+      assertJobExecutionBody(body);
       started = true;
       const container = body.containers[0];
       assert.equal(container.image, image);
@@ -495,10 +646,20 @@ test(`human SQL Job token lifecycle: ${scenario}`, async () => {
       });
       return '{"name":"admin1"}';
     }
-    if (path.endsWith('/executions/admin1')) return JSON.stringify({ properties: {
-      status: scenario === 'job-failure' ? 'Failed' : 'Succeeded', template: executionTemplate,
-    } });
-    if (path.endsWith('/executions')) return JSON.stringify({ value: started ? [{ name: 'admin1', properties: { status: 'Running' } }] : [] });
+    if (path.endsWith('/executions/admin1')) {
+      if (scenario === 'poll-failure') cliFailure();
+      const actual = structuredClone(executionTemplate);
+      if (scenario === 'wrong-execution-image') actual.containers[0].image = 'weatheracr.azurecr.io/weather-backend:latest';
+      if (scenario === 'wrong-execution-command') actual.containers[0].command = ['npm'];
+      return JSON.stringify({ properties: {
+        status: scenario === 'job-failure' ? 'Failed' : 'Succeeded', template: actual,
+      } });
+    }
+    if (path.endsWith('/executions')) {
+      if ((scenario === 'initial-list-failure' && !secretUpdates.length) ||
+          (scenario === 'execution-list-failure' && started)) cliFailure();
+      return JSON.stringify({ value: started || scenario === 'overlap' ? [{ name: 'admin1', properties: { status: 'Running' } }] : [] });
+    }
     throw new Error(`Unexpected human bootstrap fake path ${path}`);
   });
   syncBuiltinESMExports();
@@ -509,18 +670,45 @@ test(`human SQL Job token lifecycle: ${scenario}`, async () => {
       ACR_LOGIN_SERVER: 'weatheracr.azurecr.io', PGADMIN_NAME: 'human@example.test',
     });
     delete process.env.GITHUB_ACTIONS;
-    if (scenario === 'nonhuman-credential') {
-      await assert.rejects(administer('principals'), /approved human/);
+    if (scenario === 'mutable-image') process.env.RELEASE_IMAGE = 'weatheracr.azurecr.io/weather-backend:latest';
+    const errors = {
+      'nonhuman-credential': /approved human/, 'initial-get-failure': /Read SQL administration Job/,
+      'initial-list-failure': /Check SQL administration overlap/, 'existing-secret': /Unexpected Job secrets/,
+      overlap: /Pause releases/, 'mutable-image': /immutable backend digest/,
+      'job-failure': /Database administration Failed/, 'cleanup-failure': /Cleanup failed:.*Remove temporary SQL administrator token/,
+      'attach-failure': /Attach temporary SQL administrator token/,
+      'attach-verification-failure': /Verify temporary SQL administrator token attachment/,
+      'start-failure': /Database administration: start Job/, 'execution-list-failure': /Database administration: discover started execution/,
+      'poll-failure': /Database administration: poll execution/,
+      'cleanup-verification-failure': /Cleanup failed:.*Verify temporary SQL administrator token removal/,
+      'attach-and-cleanup-failure': /SQL operation also failed:.*Attach temporary SQL administrator token.*Cleanup failed:.*Remove temporary SQL administrator token/,
+      'wrong-execution-image': /approved digest and command/, 'wrong-execution-command': /approved digest and command/,
+      'invalid-cleanup-secrets': /Cleanup failed:.*invalid Job secrets/, 'unsupported-template': /do not support volumes/,
+    };
+    if (errors[scenario]) await assert.rejects(administer('principals'), (error) => {
+      assert.match(error.message, errors[scenario]);
+      assert.equal(error.message.includes('synthetic-token'), false);
+      if (scenario.includes('cleanup')) assert.match(error.message, /token removal FAILED/);
+      if (scenario === 'attach-and-cleanup-failure') assert.equal(error.errors.length, 2);
+      return true;
+    });
+    else await administer('principals');
+    if (['nonhuman-credential', 'initial-get-failure', 'initial-list-failure', 'existing-secret', 'overlap', 'mutable-image'].includes(scenario)) {
       assert.deepEqual(secretUpdates, []);
+      assert.equal(started, false);
     } else {
-      if (scenario === 'cleanup-failure') await assert.rejects(administer('principals'), /token removal FAILED/);
-      else if (scenario === 'job-failure') await assert.rejects(administer('principals'), /Database administration Failed/);
-      else await administer('principals');
       assert.deepEqual(secretUpdates, [[{ name: 'temporary-sql-admin', value: 'synthetic-token' }], []]);
-      assert.equal(started, true);
+      assert.equal(started, !['attach-failure', 'attach-and-cleanup-failure', 'attach-verification-failure', 'start-failure', 'unsupported-template'].includes(scenario));
+      if (!scenario.includes('cleanup')) {
+        assert.deepEqual(secrets, []);
+        assert.equal(events.at(-1).method, 'get', 'Cleanup success requires a read-back.');
+        assert.ok(logs.some((message) => message.includes('Removed temporary')));
+      } else assert.equal(logs.some((message) => message.includes('Removed temporary')), false);
     }
+    assert.equal(logs.join('\n').includes('synthetic-token'), false);
+    if (scenario === 'secret-propagation') assert.equal(pendingReads, 2, 'Both PATCH operations must be observed completing.');
   } finally {
-    command.mock.restore(); syncBuiltinESMExports();
+    command.mock.restore(); pause.mock.restore(); syncBuiltinESMExports(); log.mock.restore();
     for (const key of Object.keys(process.env)) if (!(key in environment)) delete process.env[key];
     Object.assign(process.env, environment);
   }

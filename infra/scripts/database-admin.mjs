@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { az, immutableImage, list, required, rest } from './azure.mjs';
+import { az, immutableImage, list, required, rest, waitFor } from './azure.mjs';
 import { executeJob } from './backend-release.mjs';
 
 export function sqlSteps(source, values) {
@@ -46,10 +46,11 @@ export async function administer(mode) {
   const script = mode === 'principals' ? 'bootstrap-database.sql' : 'grant-runtime.sql';
   const steps = sqlSteps(readFileSync(new URL(script, import.meta.url), 'utf8'), values);
   const id = `/subscriptions/${subscription}/resourceGroups/${required('AZURE_RESOURCE_GROUP')}/providers/Microsoft.App/jobs/${required('MIGRATION_JOB_NAME')}`;
-  const job = rest('get', id);
+  const job = rest('get', id, null, '', 'Read SQL administration Job');
   const configuration = job.properties.configuration;
+  if (configuration.secrets != null && !Array.isArray(configuration.secrets)) throw new Error('Azure returned invalid Job secrets.');
   if (configuration.secrets?.length) throw new Error('Unexpected Job secrets; refusing to overwrite another operator configuration.');
-  if (list(id, '/executions').some((execution) => execution.properties.status === 'Running')) {
+  if (list(id, '/executions', 'Check SQL administration overlap').some((execution) => execution.properties.status === 'Running')) {
     throw new Error('Pause releases and wait for the active Job before SQL administration.');
   }
   const template = structuredClone(job.properties.template);
@@ -95,10 +96,22 @@ export async function administer(mode) {
   const token = az(['account', 'get-access-token', '--subscription', subscription,
     '--resource', 'https://ossrdbms-aad.database.windows.net']).accessToken;
   if (typeof token !== 'string' || !token) throw new Error('Azure returned no SQL administrator token.');
+  async function verifySecret(present) {
+    const operation = present ? 'Verify temporary SQL administrator token attachment' : 'Verify temporary SQL administrator token removal';
+    await waitFor(operation, () => {
+      const current = rest('get', id, null, '', operation);
+      if (current.properties.provisioningState === 'Failed') throw new Error(`${operation}: Job provisioning failed.`);
+      const secrets = current.properties.configuration.secrets;
+      if (secrets != null && !Array.isArray(secrets)) throw new Error(`${operation}: Azure returned invalid Job secrets.`);
+      return current.properties.provisioningState === 'Succeeded' &&
+        (secrets ?? []).some((secret) => secret.name === 'temporary-sql-admin') === present;
+    }, 120_000);
+  }
   try {
     rest('patch', id, { properties: { configuration: {
       ...configuration, secrets: [{ name: 'temporary-sql-admin', value: token }],
-    } } });
+    } } }, '', 'Attach temporary SQL administrator token');
+    await verifySecret(true);
     const execution = await executeJob(id, template, 'Database administration');
     console.info(`Human SQL phase ${mode} completed in private Job execution ${execution}.`);
   } catch (error) {
@@ -106,10 +119,11 @@ export async function administer(mode) {
     throw error;
   } finally {
     try {
-      rest('patch', id, { properties: { configuration: { ...configuration, secrets: [] } } });
+      rest('patch', id, { properties: { configuration: { ...configuration, secrets: [] } } }, '', 'Remove temporary SQL administrator token');
+      await verifySecret(false);
     } catch (error) {
       throw new AggregateError([failure, error].filter(Boolean),
-        `Temporary SQL administrator token removal FAILED; pause releases and remove the Job secret with human authorization. ${failure ? `SQL operation also failed: ${failure.message}` : 'SQL operation completed; cleanup still failed.'}`);
+        `Temporary SQL administrator token removal FAILED; pause releases and remove the Job secret with human authorization. ${failure ? `SQL operation also failed: ${failure.message}` : 'SQL operation completed; cleanup still failed.'} Cleanup failed: ${error.message}`);
     }
     console.info('Removed temporary SQL administrator token from Job configuration.');
   }

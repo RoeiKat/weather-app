@@ -36,21 +36,31 @@ async function setTraffic(id, traffic) {
 
 export async function executeJob(jobId, template, description = 'Migration') {
   const image = template.containers[0].image;
-  const executions = list(jobId, '/executions');
+  const executions = list(jobId, '/executions', `${description}: check execution overlap`);
   if (executions.some((execution) => execution.properties.status === 'Running')) {
     throw new Error('Another Job execution is running; refusing overlap.');
   }
+  const containers = [...template.containers, ...(template.initContainers ?? [])];
+  if (template.volumes?.length || containers.some((container) => container.probes?.length || container.volumeMounts?.length)) {
+    throw new Error('Job start overrides do not support volumes, volume mounts or probes; inspect the platform template.');
+  }
+  // GET returns a JobTemplate, but /start accepts the narrower JobExecutionTemplate.
+  const executionContainer = ({ name, image, command, args, env, resources }) => ({
+    name, image, command, args, env, resources,
+  });
+  const executionTemplate = { containers: template.containers.map(executionContainer) };
+  if (template.initContainers) executionTemplate.initContainers = template.initContainers.map(executionContainer);
   // Override this execution, rather than rewrite Terraform-owned Job configuration.
-  const started = rest('post', jobId, template, '/start');
+  const started = rest('post', jobId, executionTemplate, '/start', `${description}: start Job`);
   const priorNames = new Set(executions.map((execution) => execution.name));
   const execution = await waitFor('migration execution identity', () => {
-    const fresh = list(jobId, '/executions').filter((item) =>
+    const fresh = list(jobId, '/executions', `${description}: discover started execution`).filter((item) =>
       !priorNames.has(item.name) && (!started?.name || item.name === started.name));
     if (fresh.length > 1) throw new Error('Ambiguous migration execution; stop for human inspection.');
     return fresh.length === 1 ? fresh[0] : false;
   }, 120_000);
   await waitFor('migration completion', () => {
-    const current = rest('get', jobId, null, `/executions/${execution.name}`);
+    const current = rest('get', jobId, null, `/executions/${execution.name}`, `${description}: poll execution`);
     const actual = current.properties.template.containers[0];
     const expected = template.containers[0];
     if (actual.image !== image || JSON.stringify(actual.command) !== JSON.stringify(expected.command) ||
