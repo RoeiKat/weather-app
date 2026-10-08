@@ -87,10 +87,6 @@ locals {
       priority = 120, direction = "Outbound", protocol = "Tcp",
       source   = local.db_cidr, destination = "AzureActiveDirectory", ports = ["443"], access = "Allow"
     }
-    dns = {
-      priority = 130, direction = "Outbound", protocol = "*",
-      source   = local.db_cidr, destination = "AzurePlatformDNS", ports = ["53"], access = "Allow"
-    }
     deny_other_out = {
       priority = 200, direction = "Outbound", protocol = "*",
       source   = local.db_cidr, destination = "*", ports = ["*"], access = "Deny"
@@ -108,7 +104,8 @@ resource "azurerm_network_security_rule" "database" {
   access                      = each.value.access
   protocol                    = each.value.protocol
   source_port_range           = "*"
-  destination_port_ranges     = each.value.ports
+  destination_port_range      = contains(each.value.ports, "*") ? "*" : null
+  destination_port_ranges     = contains(each.value.ports, "*") ? null : each.value.ports
   source_address_prefix       = each.value.source
   destination_address_prefix  = each.value.destination
 }

@@ -134,3 +134,85 @@ run "api_from_prepared_digest" {
     error_message = "Bootstrap must preserve the generated allowed origin and PostgreSQL cross-AZ HA."
   }
 }
+
+run "first_apply_compatibility" {
+  command = plan
+
+  assert {
+    condition     = azurerm_monitor_scheduled_query_rules_alert_v2.revisions.skip_query_validation
+    error_message = "The revision alert must be creatable before the Container Apps system logs table exists."
+  }
+  assert {
+    condition = trimspace(azurerm_monitor_scheduled_query_rules_alert_v2.revisions.criteria[0].query) == trimspace(<<-KQL
+      ContainerAppSystemLogs_CL
+      | where Type_s == "Warning" or Log_s has_any ("ErrImagePull", "ImagePullBackOff", "Failed", "Unhealthy")
+      | summarize Failures = count()
+    KQL
+    )
+    error_message = "Skipping first-deployment query validation must not change the existing revision alert query or table."
+  }
+  assert {
+    condition = toset(keys(azurerm_network_security_rule.database)) == toset([
+      "workload_sql", "ha_sql_in", "deny_private_in", "ha_sql_out", "storage", "entra", "deny_other_out"
+      ]) && alltrue([
+      for rule in azurerm_network_security_rule.database : rule.destination_address_prefix != "AzurePlatformDNS"
+    ])
+    error_message = "Remove the explicit AzurePlatformDNS allow rule without adding a replacement or changing other rule names."
+  }
+  assert {
+    condition = alltrue([
+      for name in ["deny_private_in", "deny_other_out"] :
+      azurerm_network_security_rule.database[name].destination_port_range == "*" &&
+      azurerm_network_security_rule.database[name].destination_port_ranges == null
+    ])
+    error_message = "All-port deny rules must use the singular wildcard port field, not a wildcard array."
+  }
+  assert {
+    condition = alltrue([
+      for name, expected in {
+        workload_sql = {
+          priority = 100, direction = "Inbound", protocol = "Tcp",
+          source   = "10.42.0.0/23", destination = "10.42.2.0/27", ports = ["5432", "6432"], access = "Allow"
+        }
+        ha_sql_in = {
+          priority = 110, direction = "Inbound", protocol = "Tcp",
+          source   = "10.42.2.0/27", destination = "10.42.2.0/27", ports = ["5432"], access = "Allow"
+        }
+        deny_private_in = {
+          priority = 200, direction = "Inbound", protocol = "*",
+          source   = "*", destination = "10.42.2.0/27", ports = ["*"], access = "Deny"
+        }
+        ha_sql_out = {
+          priority = 100, direction = "Outbound", protocol = "Tcp",
+          source   = "10.42.2.0/27", destination = "10.42.2.0/27", ports = ["5432"], access = "Allow"
+        }
+        storage = {
+          priority = 110, direction = "Outbound", protocol = "Tcp",
+          source   = "10.42.2.0/27", destination = "Storage.SwedenCentral", ports = ["443"], access = "Allow"
+        }
+        entra = {
+          priority = 120, direction = "Outbound", protocol = "Tcp",
+          source   = "10.42.2.0/27", destination = "AzureActiveDirectory", ports = ["443"], access = "Allow"
+        }
+        deny_other_out = {
+          priority = 200, direction = "Outbound", protocol = "*",
+          source   = "10.42.2.0/27", destination = "*", ports = ["*"], access = "Deny"
+        }
+      } :
+      azurerm_network_security_rule.database[name].priority == expected.priority &&
+      azurerm_network_security_rule.database[name].direction == expected.direction &&
+      azurerm_network_security_rule.database[name].access == expected.access &&
+      azurerm_network_security_rule.database[name].protocol == expected.protocol &&
+      azurerm_network_security_rule.database[name].source_address_prefix == expected.source &&
+      azurerm_network_security_rule.database[name].destination_address_prefix == expected.destination &&
+      azurerm_network_security_rule.database[name].source_port_range == "*" &&
+      (contains(expected.ports, "*") ?
+        azurerm_network_security_rule.database[name].destination_port_range == "*" &&
+        azurerm_network_security_rule.database[name].destination_port_ranges == null :
+        azurerm_network_security_rule.database[name].destination_port_range == null &&
+        toset(azurerm_network_security_rule.database[name].destination_port_ranges) == toset(expected.ports)
+      )
+    ])
+    error_message = "Every remaining database NSG rule must retain its priority, direction, access, protocol, prefixes and port semantics."
+  }
+}

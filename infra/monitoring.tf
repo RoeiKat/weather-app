@@ -92,13 +92,14 @@ resource "azurerm_monitor_activity_log_alert" "database_health" {
 }
 
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "revisions" {
-  name                 = "${var.name}-revision-failures"
-  resource_group_name  = azurerm_resource_group.app.name
-  location             = local.location
-  scopes               = [azurerm_log_analytics_workspace.app.id]
-  severity             = 2
-  evaluation_frequency = "PT5M"
-  window_duration      = "PT5M"
+  name                  = "${var.name}-revision-failures"
+  resource_group_name   = azurerm_resource_group.app.name
+  location              = local.location
+  scopes                = [azurerm_log_analytics_workspace.app.id]
+  severity              = 2
+  evaluation_frequency  = "PT5M"
+  window_duration       = "PT5M"
+  skip_query_validation = true
   criteria {
     query                   = <<-KQL
       ContainerAppSystemLogs_CL
