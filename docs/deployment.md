@@ -6,6 +6,25 @@ ACR Basic and private PostgreSQL Flexible Server with Entra and managed PgBounce
 Public URL:
 <https://weatherroeidev-public-d4e7a2bxgxefe6cf.z03.azurefd.net>.
 
+## Final local operations
+
+From the repository root (Node 24, Azure CLI and Terraform 1.16.5 on PATH):
+
+```text
+Deploy:  git push origin main
+Status:  npm run infra:status
+Destroy: npm run infra:destroy
+```
+
+Use `az login` as an authorized human in the configured assignment subscription.
+Status is read-only. Destroy plans both roots, asks for **one** explicit
+confirmation, removes the application first, verifies its group is absent,
+then removes state storage/bootstrap. `npm run infra:destroy -- --dry-run`
+only inspects plans; `-- --force` explicitly authorizes non-interactive deletion.
+Do not push or run delivery workflows during teardown. Tenant identities and
+manual subscription RBAC are not deleted; Key Vault is not purged.
+See [local operations evidence and safety details](ai/21-local-destroy-and-final-operations.md).
+
 ## Normal delivery
 
 [Production delivery](../.github/workflows/production.yml) runs on main pushes.

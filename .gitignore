@@ -2,3 +2,14 @@
 .env
 .env.*
 !.env.example
+
+# Generated local Terraform review/operations artifacts; never commit state.
+infra/review-plan.json
+infra/destroy-plan.json
+infra/plan-fingerprint.json
+infra/plan-metadata.json
+infra/*.diagnostics.json
+infra/.local-operations/
+*.tfplan
+/plan-fingerprint.json
+/plan-metadata.json

@@ -180,6 +180,15 @@ obsolete queued commits are rejected before production mutation.
   and session revoked.
 - Canonical public frontend and assets loaded; production and candidate health/
   anonymous-session smoke passed. Direct ACA canonical access returned **403**.
+- A real Chromium session, with no API interception, loaded the public frontend,
+  bootstrapped its session, searched Stockholm and rendered the multi-day
+  forecast. All browser API requests used the Front Door origin and `/api/v1`;
+  no direct ACA/provider or other external subresource requests and no page
+  errors were observed. A local cross-platform byte smoke initially compared
+  Windows HTML against a Linux CI artifact; after proving equivalence modulo
+  line endings/edge whitespace, local checking used the actual served HTML hash
+  while still verifying exact hashed JavaScript bytes and all headers/routes.
+  CI continues to compare its exact deployed artifact, without normalization.
 - Migration Job currently had **no temporary-sql-admin secret**; current shell
   and inspected local environment files had no temporary SQL token assignment.
   A limited tracked-file private-key/JWT pattern check found zero matches; this
@@ -187,16 +196,63 @@ obsolete queued commits are rejected before production mutation.
 
 ## Remaining evidence / limitations
 
-Main workflow execution, subsequent automatic release and final Azure metrics
-will be appended after verification; local validation is not a claim that CI
-has run. Front Door control-plane `deploymentStatus` reported `NotStarted`
+The first real main push (`65d53d7`) triggered
+[automatic run 37804008843](https://github.com/RoeiKat/weather-app/actions/runs/37804008843).
+All three validation/build jobs succeeded. OIDC, protected remote-state planning,
+plan sealing/verification and Terraform apply succeeded. The migration Job
+`weatherroeidev-migrate-378f2ez` succeeded with the resolved image:
+
+`weatherroeidevacr.azurecr.io/weather-backend@sha256:8fbe6ac56a97318169048007dc6c5d1b1de98665cbf84fae7265ece6f2e12ae8`
+
+The backend receipt recorded `promoted`,
+`weatherroeidev-api--r37804008843-1`, retaining
+`weatherroeidev-api--r1791472620315-1`; production and candidate smoke and two
+ready replicas on both revisions were independently verified. Frontend then
+failed only the unsupported-API 404 assertion described above and restored the
+prior index, verifying recovery. The successful backend was not unnecessarily
+rolled back. The corrected main push (`771d800`) automatically started
+[run 37804785806](https://github.com/RoeiKat/weather-app/actions/runs/37804785806);
+its final successful outcome is recorded below.
+
+Actual Front Door `OriginHealthPercentage`, in an explicitly bounded window
+ending at the canonical health response's HTTP Date, showed **100%** for each
+current API, candidate and frontend origin in the latest three recorded minutes
+(15:49-15:51 UTC). The retired reversed candidate hostname remained a separate
+0% historical series and was not mistaken for the current origin. Health-probe
+logs confirmed historical 404s for that wrong host; the last failed probe for
+the corrected host was at 15:31:09 UTC, before healthy current measurements.
+
+Front Door control-plane `deploymentStatus` reported `NotStarted`
 despite functional data-plane routing, so bounded endpoint checks are necessary
 for edge propagation. One attempted projected access-log query returned no
-rows and is not evidence of healthy probes. Provider/API health does not prove
+rows because only health-probe logs are configured; it was not used as evidence
+of healthy probes. Provider/API health does not prove
 regional disaster recovery, database restore/failover or an application SLA.
 No disaster-recovery SQL bootstrap, retained-schema rollback drill, or external
 dependency security audit is claimed. The existing broad disposable-assignment
 OIDC role union and historical nonblocking image scanning remain limitations;
 they were not expanded to bypass deployment protections.
+
+## Final successful deployment result
+
+The final-operations handoff on 2026-10-08 explicitly confirmed that
+[run 37804785806](https://github.com/RoeiKat/weather-app/actions/runs/37804785806),
+deploying commit `771d800`, completed successfully:
+
+- Infrastructure, backend migration/release and frontend deployment succeeded.
+- Backend candidate validation and promotion succeeded; the previous healthy
+  revision remains available for rollback.
+- Public Front Door application checks succeeded end-to-end.
+- Direct ACA access remained blocked with HTTP 403, including when supplying
+  the expected Front Door ID header.
+- GitHub Actions used OIDC. Normal push-to-main delivery is **READY**.
+
+This completion entry records the verified handoff, not a new production
+deployment or a claim that every earlier check was rerun. The earlier
+`37804008843` run promoted the backend but failed overall on the frontend
+assertion subsequently corrected. Optional backend-only path-filter
+verification was interrupted, was **not completed**, and is **not required**
+for this assignment: the successful complete main delivery is sufficient.
+It will not be resumed during final operations.
 
 **Human decision: PENDING REVIEW**

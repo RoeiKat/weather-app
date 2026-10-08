@@ -1,0 +1,9 @@
+{
+  "name": "weather-assignment-operations",
+  "private": true,
+  "scripts": {
+    "infra:status": "node operations/local.mjs status",
+    "infra:destroy": "node operations/local.mjs destroy",
+    "infra:test": "node --test infra/test/*.test.mjs operations/*.test.mjs"
+  }
+}
