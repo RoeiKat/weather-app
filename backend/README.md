@@ -161,8 +161,12 @@ SQL deadline five seconds, lock deadline three seconds and physical connection
 recycling ten minutes. Account hashing and provider I/O never hold SQL
 transactions. There are no automatic write retries after ambiguous commits.
 Database failures log only a sanitized event and return SERVICE_UNAVAILABLE.
-Entra refresh, TLS trust, private DNS, PgBouncer/HA failover and aggregate pool
-capacity must still be validated in the accepted Azure environment.
+Initial managed-identity authentication, validated TLS, private DNS and
+PgBouncer connectivity have been exercised in the live deployment. Entra
+rollover, PgBouncer/HA failover and aggregate pool capacity still need dedicated
+operational tests. Backend-only main changes run the backend build/release path
+without applying Terraform or redeploying the frontend; image digests and
+migration/candidate promotion are coordinated automatically.
 
 The private bootstrap administrator maps identities and grants only necessary
 SQL permissions. The runtime principal needs schema USAGE, SELECT/INSERT on
