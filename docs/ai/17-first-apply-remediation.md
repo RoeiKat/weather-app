@@ -118,3 +118,111 @@ approval. After an approved apply, verify Azure acceptance of the corrected
 rules, private DNS/database connectivity, system-log ingestion and table
 creation, and revision-alert evaluation/delivery. These live checks remain
 unverified.
+
+## Second live apply: PgBouncer remediation (2026-10-08)
+
+- **Author/tool:** AI assistant using Copilot SDK in VS Code; model Unknown.
+- **Human decision owner:** Requesting user.
+- **Final human decision:** **Approved for re-plan, not yet applied**.
+- **Approval reference:** The requesting user's explicit follow-up instruction
+  in this conversation on 2026-10-08, reporting exactly four PgBouncer errors
+  from the complete second apply log and directing removal of custom tuning.
+  The user explicitly prohibited another Azure apply.
+
+### Conversation and four reported live failures
+
+**Prompt (faithful summary):** Keep `pgbouncer.enabled = true`,
+`require_secure_transport = on`, and `ssl_min_protocol_version = TLSv1.2`.
+Remove Terraform management of `pgbouncer.default_pool_size`,
+`pgbouncer.max_client_conn`, `pgbouncer.min_pool_size`, `pgbouncer.pool_mode`,
+and `pgbouncer.reserve_pool_size`. Azure defaults, including transaction
+pooling, are acceptable for this small assignment; application connection
+pools remain bounded. Prefer this simplification over additional dependency
+ordering or premature tuning without measured workload. Preserve PostgreSQL
+SKU, HA, networking, authentication, storage, TLS, and architecture. Run local
+Terraform and existing helper/actionlint checks, document the failures and
+decision, and do not apply anything to Azure.
+
+The user reported that the **complete second live apply log contained exactly
+four errors, all PgBouncer-related**:
+
+| # | Parameter | Reported failure and cause |
+| --- | --- | --- |
+| 1 | `pgbouncer.reserve_pool_size` | Azure PostgreSQL Flexible Server rejected this unsupported parameter on PostgreSQL 17. Remove it rather than substituting another tuning parameter. |
+| 2 | `pgbouncer.max_client_conn` | Configuration failed because PgBouncer was not yet enabled. |
+| 3 | `pgbouncer.min_pool_size` | Configuration failed because PgBouncer was not yet enabled. |
+| 4 | `pgbouncer.pool_mode` | Configuration failed because PgBouncer was not yet enabled. |
+
+These are faithful summaries of human-supplied live evidence. The assistant
+did not retrieve or independently inspect the apply log; no raw error codes,
+resource identifiers, or sensitive values are invented or reproduced.
+
+The configuration resource used one `for_each` map for enablement and tuning.
+Its instances depended on the server but not on one another, so Terraform could
+configure tuning concurrently with `pgbouncer.enabled`. This raced Azure's
+enablement prerequisite. Additional sequencing could address that race, but
+would not make the unsupported PG17 reserve parameter valid and is unnecessary
+when the assignment accepts Azure defaults.
+
+### Accepted simplification and preserved behavior
+
+The [database configuration](../../infra/database.tf) now manages exactly:
+
+```hcl
+"require_secure_transport" = "on"
+"ssl_min_protocol_version" = "TLSv1.2"
+"pgbouncer.enabled"        = "true"
+```
+
+All five requested tuning entries were removed. `pgbouncer.default_pool_size`
+was removed as part of the approved defaults decision, not because the user
+reported a fifth error. No replacement parameter, resource split, extra
+dependency, delay, or workaround was added.
+
+**Accepted:** Rely on Azure-managed PgBouncer defaults, including transaction
+pooling, rather than tune without workload measurements. PgBouncer remains
+enabled and both explicit TLS settings are unchanged. The API still uses port
+6432 with pool maximum 5; migrations use direct port 5432 with pool maximum 1.
+No application-side connection settings changed.
+
+**Rejected/out of scope:** Additional PgBouncer dependency complexity, custom
+pool tuning, changes to PostgreSQL version/SKU, HA, networking, authentication,
+storage, TLS, architecture, or an Azure apply. Existing policy-tag lifecycle
+ignores and the earlier alert/NSG/DNS fixes remain intact.
+
+Official [Azure PostgreSQL PgBouncer guidance](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-pgbouncer)
+was retrieved through the Azure documentation tool on 2026-10-08. It documents
+`transaction` as the default pooling mode and says tuning parameters are
+exposed only after `pgbouncer.enabled` is true. This supports the defaults and
+enablement reasoning; the unsupported reserve parameter on PG17 is evidenced
+by the reported live failure, not an independently queried parameter catalog.
+
+### Local verification and remaining live checks
+
+Using existing Terraform **1.16.5**, configured AzureRM **5.8.0**, Node, and
+actionlint **1.7.12**:
+
+- `terraform -chdir=infra fmt database.tf tests\assignment.tftest.hcl`: passed.
+- `terraform -chdir=infra fmt -check -recursive`: passed.
+- `terraform -chdir=infra validate -no-color`: passed.
+- `terraform -chdir=infra test -no-color`: **3 passed, 0 failed**, with mocked
+  AzureRM and plan-only runs.
+- `node --test .\infra\test\delivery.test.mjs`: **26 passed, 0 failed**.
+- `.\infra\.tools\actionlint\actionlint.exe -no-color`: passed.
+- Whitespace, documentation-link/status, and changed-file scope checks: passed.
+
+The [Terraform regressions](../../infra/tests/assignment.tftest.hcl) now assert
+the exact three managed parameter keys and values, preventing reintroduction
+of custom PgBouncer tuning while retaining TLS. They also check the actual
+planned API and migration Job environment values retain pool bounds 5 and 1.
+Only the database file, relevant Terraform tests, and this record changed.
+No dependencies were installed, and workflows and helper code were unchanged.
+
+No real Azure plan, apply, resource mutation, or deployment was performed in
+this follow-up. Local tests do not prove successful live enablement or current
+server defaults. Prepare and review a fresh plan against the partially deployed
+state, including removal/reset of any tuning configuration that succeeded
+before the failure. After a separately approved apply, verify PgBouncer
+enablement, Azure-managed defaults/transaction pooling, and API/database
+connectivity. Do not reuse the failed saved plan or infer apply authorization
+from this remediation.

@@ -134,6 +134,13 @@ run "api_from_prepared_digest" {
     error_message = "Bootstrap must preserve the generated allowed origin and PostgreSQL cross-AZ HA."
   }
   assert {
+    condition = (
+      one([for env in azurerm_container_app.api[0].template[0].container[0].env : env.value if env.name == "DB_POOL_MAX"]) == "5" &&
+      one([for env in azurerm_container_app_job.migrate.template[0].container[0].env : env.value if env.name == "DB_POOL_MAX"]) == "1"
+    )
+    error_message = "Azure-managed PgBouncer defaults must retain bounded API and migration connection pools."
+  }
+  assert {
     condition = alltrue([
       for tags in concat([
         azurerm_resource_group.app.tags,
@@ -168,6 +175,18 @@ run "api_from_prepared_digest" {
 run "first_apply_compatibility" {
   command = plan
 
+  assert {
+    condition = toset(keys(azurerm_postgresql_flexible_server_configuration.database)) == toset([
+      "require_secure_transport", "ssl_min_protocol_version", "pgbouncer.enabled"
+      ]) && alltrue([
+      for name, expected in {
+        "require_secure_transport" = "on"
+        "ssl_min_protocol_version" = "TLSv1.2"
+        "pgbouncer.enabled"        = "true"
+      } : azurerm_postgresql_flexible_server_configuration.database[name].value == expected
+    ])
+    error_message = "Manage only PgBouncer enablement and the existing TLS settings; leave PgBouncer tuning to Azure defaults."
+  }
   assert {
     condition     = azurerm_monitor_scheduled_query_rules_alert_v2.revisions.skip_query_validation
     error_message = "The revision alert must be creatable before the Container Apps system logs table exists."

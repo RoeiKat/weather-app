@@ -61,14 +61,9 @@ resource "azurerm_postgresql_flexible_server_database" "weather" {
 
 resource "azurerm_postgresql_flexible_server_configuration" "database" {
   for_each = {
-    "require_secure_transport"    = "on"
-    "ssl_min_protocol_version"    = "TLSv1.2"
-    "pgbouncer.enabled"           = "true"
-    "pgbouncer.pool_mode"         = "transaction"
-    "pgbouncer.default_pool_size" = "20"
-    "pgbouncer.max_client_conn"   = "100"
-    "pgbouncer.min_pool_size"     = "0"
-    "pgbouncer.reserve_pool_size" = "5"
+    "require_secure_transport" = "on"
+    "ssl_min_protocol_version" = "TLSv1.2"
+    "pgbouncer.enabled"        = "true"
   }
   name      = each.key
   server_id = azurerm_postgresql_flexible_server.database.id
